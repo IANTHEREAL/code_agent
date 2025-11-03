@@ -62,6 +62,8 @@ func main() {
 		ParentBranchID: *parent,
 		ProjectName:    conf.ProjectName,
 		Task:           tsk,
+		GitUserName:    conf.GitUserName,
+		GitUserEmail:   conf.GitUserEmail,
 	}
 
 	var report map[string]any

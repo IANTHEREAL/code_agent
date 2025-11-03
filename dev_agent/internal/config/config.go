@@ -24,6 +24,8 @@ type AgentConfig struct {
 	ProjectName       string
 	WorkspaceDir      string
 	GitHubToken       string
+	GitUserName       string
+	GitUserEmail      string
 }
 
 func FromEnv() (AgentConfig, error) {
@@ -92,6 +94,15 @@ func FromEnv() (AgentConfig, error) {
 		return AgentConfig{}, errors.New("GITHUB_ACCESS_TOKEN must be set")
 	}
 
+	gitUserName := strings.TrimSpace(os.Getenv("GIT_AUTHOR_NAME"))
+	if gitUserName == "" {
+		return AgentConfig{}, errors.New("GIT_AUTHOR_NAME must be set")
+	}
+	gitUserEmail := strings.TrimSpace(os.Getenv("GIT_AUTHOR_EMAIL"))
+	if gitUserEmail == "" {
+		return AgentConfig{}, errors.New("GIT_AUTHOR_EMAIL must be set")
+	}
+
 	return AgentConfig{
 		AzureAPIKey:       apiKey,
 		AzureEndpoint:     endpoint,
@@ -106,6 +117,8 @@ func FromEnv() (AgentConfig, error) {
 		ProjectName:       project,
 		WorkspaceDir:      workspace,
 		GitHubToken:       githubToken,
+		GitUserName:       gitUserName,
+		GitUserEmail:      gitUserEmail,
 	}, nil
 }
 

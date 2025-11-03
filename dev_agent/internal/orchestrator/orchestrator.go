@@ -107,11 +107,19 @@ type PublishOptions struct {
 	ParentBranchID string
 	ProjectName    string
 	Task           string
+	GitUserName    string
+	GitUserEmail   string
 }
 
 func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool) (string, error) {
 	if opts.GitHubToken == "" {
 		return "", errors.New("missing GitHub token for publish step")
+	}
+	if strings.TrimSpace(opts.GitUserName) == "" {
+		return "", errors.New("missing git user name for publish step")
+	}
+	if strings.TrimSpace(opts.GitUserEmail) == "" {
+		return "", errors.New("missing git user email for publish step")
 	}
 	lineage := handler.BranchRange()
 	parent := lineage["latest_branch_id"]
@@ -141,6 +149,7 @@ func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[
 
 	meta := fmt.Sprintf("commit-meta: start_branch=%s latest_branch=%s", lineage["start_branch_id"], lineage["latest_branch_id"])
 	tokenLiteral := strconv.Quote(opts.GitHubToken)
+	identityInstruction := fmt.Sprintf("set git user.name to %q and user.email to %q (update both local and global config before committing).", opts.GitUserName, opts.GitUserEmail)
 	prompt := fmt.Sprintf(`Finalize the task by committing and pushing the current workspace state.
 
 Task: %s
@@ -150,7 +159,17 @@ Meta (include in the commit message if helpful): %s
 
 The worklog is located into '/home/pan/workspace/worklog.md'.
 
-Choose an appropriate git branch name for this task, commit the related file changes (only files related to user task, don't commit intermediate files, like worklog, review log, temporary tests or scripts), and reply with the branch name and commit hash. Do not print the raw token anywhere except when configuring git.`, opts.Task, outcome, tokenLiteral, meta)
+Choose an appropriate git branch name for this task, commit the related file changes, and reply with the branch name and commit hash. Do not print the raw token anywhere except when configuring git.
+
+Publishing rules:
+- Configure git identity (%s).
+- Use the original user task and the latest entries in '/home/pan/workspace/worklog.md' to determine the target repository; confirm the repository root with 'git rev-parse --show-toplevel' and verify the remote via 'git remote -v'. Do not operate on an unrelated repo.
+- Stage and commit only the files required for this task; exclude logs, review artifacts, and temporary scratch files.
+- Keep branch names kebab-case and describe the task scope.
+- Keep the commit subject <= 72 characters and meaningful.
+- Unset exported credentials after pushing.
+
+Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, identityInstruction)
 
 	logx.Infof("Finalizing workflow by asking claude_code to push from branch %s lineage.", parent)
 	execArgs := map[string]any{
@@ -175,7 +194,14 @@ Choose an appropriate git branch name for this task, commit the related file cha
 	if branchID == "" {
 		return "", errors.New("publish execute_agent missing branch id")
 	}
-
+	if report != nil {
+		if respText, ok := data["response"].(string); ok {
+			if summary := strings.TrimSpace(respText); summary != "" {
+				report["publish_report"] = summary
+			}
+		}
+		report["publish_pantheon_branch_id"] = branchID
+	}
 	if branchStatus := strings.TrimSpace(fmt.Sprintf("%v", data["status"])); branchStatus != "" {
 		switch strings.ToLower(branchStatus) {
 		case "failed":
