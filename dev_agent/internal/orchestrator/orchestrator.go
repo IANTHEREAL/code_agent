@@ -168,6 +168,7 @@ Publishing rules:
 - Keep branch names kebab-case and describe the task scope.
 - Keep the commit subject <= 72 characters and meaningful.
 - Unset exported credentials after pushing.
+- Git push must be fully non-interactive. Rewrite the existing 'origin' remote to include the GitHub token (example: "CURRENT=$(git remote get-url origin); git remote set-url origin https://<github-username>:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git"), run "git push -u origin <branch>", then restore the original remote URL. Do not print the raw token in logs.
 
 Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, identityInstruction)
 
