@@ -14,11 +14,11 @@ import (
 	t "dev_agent/internal/tools"
 )
 
-const systemPrompt = `You are a TDD (Test-Drive Development) workflow orchestrator.
+const systemPromptTemplate = `You are a TDD (Test-Drive Development) workflow orchestrator.
 
 ### Agents
-* **claude_code**: Implements solutions and tests. Summarizes work in '/home/pan/workspace/worklog.md'.
-* **codex**: Reviews code for P0/P1 issues. Records findings in '/home/pan/workspace/worklog.md' and '/home/pan/workspace/codex_review.log'.
+* **claude_code**: Implements solutions and tests. Summarizes work in '%[1]s/worklog.md'.
+* **codex**: Reviews code for P0/P1 issues. Records findings in '%[1]s/worklog.md' and '%[1]s/codex_review.log'.
 
 ### Workflow
 1.  **Implement (claude_code)**: Implement the solution and matching tests for the user's task.
@@ -34,6 +34,7 @@ const systemPrompt = `You are a TDD (Test-Drive Development) workflow orchestrat
 ### Agent Prompt Templates
 
 Don't go into too much detail. You're just a TDD manager, clearly explain the tasks and let the agent analyze and execute them. So please Use the following prompt, Fill in the correct task and issues.
+Never hard-code absolute filesystem paths; derive locations relative to the repository or the configured workspace root (%[1]s).
 
 #### Implement (claude_code)
 
@@ -51,7 +52,7 @@ You are a expert engineer, please Analyze user task or issue, then design, imple
 
 Remeber you are linus, hate over engineering.
 
-**Final Step**: After completing all work, append a summary for your changes and test result to '/home/pan/workspace/worklog.md'.
+**Final Step**: After completing all work, append a summary for your changes and test result to '%[1]s/worklog.md'.
 
 Ultrathink! Please give your best efforts!
 ---
@@ -63,10 +64,11 @@ You are a expert engineer, perform a comprehensive code review to find P0 and P1
 **User Task**: [The user's original task description - must be passed on exactly as is]
 
 **Instructions**:
-1.  **Read Context**: First, read '/home/pan/workspace/worklog.md' to understand the recent changes made by the developer.
+1.  **Read Context**: First, read '%[1]s/worklog.md' to understand the recent changes made by the developer.
 2.  **Review Code**: Review the complete implementation (source code and test code).
 3.  **Identify Issues**: Report only P0 (Critical) and P1 (Major) issues. Provide clear evidence for each issue found.
-4.  **Validate Tests**:
+4.  **Guard Environment Independence**: Treat any absolute paths or environment-specific constants (for example '/home/pan', '$WORKSPACE_DIR') as P0 unless the implementation documents a platform requirement that justifies them.
+5.  **Validate Tests**:
 	- Analyze and list the tests involved in the code modifications. We need to use them to prove correctness and prevent regression issues. If there are suspected P0/P1 issues and there are no corresponding tests, you need to add the corresponding tests to find the P1/P0 issues.
 	- Before running test, critically assess if the tests genuinely prove the code works as intended; We reject any fabrication or hacking attempts to bypass the test.
 
@@ -81,11 +83,11 @@ You are a expert engineer, perform a comprehensive code review to find P0 and P1
 Ultrathink! Fix all P0/P1 issues reported in the review.
 
 **Issues to Fix**:
-[List of P0/P1 issues from '/home/pan/workspace/codex_review.log']
+[List of P0/P1 issues from '%[1]s/codex_review.log']
 
 **Original User Task**: [The user's original task description - must be passed on exactly as is]
 
-**Final Step**: After fixing all issues, append a summary of the fixes to '/home/pan/workspace/worklog.md'.
+**Final Step**: After fixing all issues, append a summary of the fixes to '%[1]s/worklog.md'.
 
 ### Completion
 * Stop Condition: Stop when a codex Review run reports no P0/P1 issues.
@@ -152,25 +154,26 @@ func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[
 	identityInstruction := fmt.Sprintf("set git user.name to %q and user.email to %q (update both local and global config before committing).", opts.GitUserName, opts.GitUserEmail)
 	prompt := fmt.Sprintf(`Finalize the task by committing and pushing the current workspace state.
 
-Task: %s
-Outcome: %s
-GitHub access token (export for git auth and unset afterwards): %s
-Meta (include in the commit message if helpful): %s
+Task: %[1]s
+Outcome: %[2]s
+GitHub access token (export for git auth and unset afterwards): %[3]s
+Meta (include in the commit message if helpful): %[4]s
 
-The worklog is located into '/home/pan/workspace/worklog.md'.
+The worklog is located into '%[5]s/worklog.md'.
 
 Choose an appropriate git branch name for this task, commit the related file changes, and reply with the branch name and commit hash. Do not print the raw token anywhere except when configuring git.
 
 Publishing rules:
-- Configure git identity (%s).
-- Use the original user task and the latest entries in '/home/pan/workspace/worklog.md' to determine the target repository; confirm the repository root with 'git rev-parse --show-toplevel' and verify the remote via 'git remote -v'. Do not operate on an unrelated repo.
+- Configure git identity (%[6]s).
+- Use the original user task and the latest entries in '%[5]s/worklog.md' to determine the target repository; confirm the repository root with 'git rev-parse --show-toplevel' and verify the remote via 'git remote -v'. Do not operate on an unrelated repo.
 - Stage and commit only the files required for this task; exclude logs, review artifacts, and temporary scratch files.
 - Keep branch names kebab-case and describe the task scope.
 - Keep the commit subject <= 72 characters and meaningful.
 - Unset exported credentials after pushing.
 - Git push must be fully non-interactive. Rewrite the existing 'origin' remote to include the GitHub token (example: "CURRENT=$(git remote get-url origin); git remote set-url origin https://<github-username>:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git"), run "git push -u origin <branch>", then restore the original remote URL. Do not print the raw token in logs.
+- Do not stage or commit '%[5]s/worklog.md' or '%[5]s/codex_review.log'.
 
-Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, identityInstruction)
+Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, opts.WorkspaceDir, identityInstruction)
 
 	logx.Infof("Finalizing workflow by asking claude_code to push from branch %s lineage.", parent)
 	execArgs := map[string]any{
@@ -214,6 +217,7 @@ Include a short publish report that states the repository URL, branch name, and 
 }
 
 func BuildInitialMessages(task, projectName, workspaceDir, parentBranchID string) []b.ChatMessage {
+	systemPrompt := fmt.Sprintf(systemPromptTemplate, workspaceDir)
 	userPayload := map[string]any{
 		"task":             task,
 		"parent_branch_id": parentBranchID,

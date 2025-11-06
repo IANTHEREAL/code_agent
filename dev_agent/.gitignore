@@ -27,6 +27,10 @@ go.work.sum
 # env file
 .env
 
+# Dev agent artifacts
+worklog.md
+codex_review.log
+
 # Editor/IDE
 # .idea/
 # .vscode/
