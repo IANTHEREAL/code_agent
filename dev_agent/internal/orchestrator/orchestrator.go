@@ -204,12 +204,10 @@ Include a short publish report that states the repository URL, branch name, and 
 	if branchID == "" {
 		return "", errors.New("publish execute_agent missing branch id")
 	}
-	publishSummary := ""
-	if respText, ok := data["response"].(string); ok {
-		publishSummary = strings.TrimSpace(respText)
-	}
+	publishSummary := extractBranchOutput(data)
 	if publishSummary == "" {
-		return "", errors.New("publish response missing required report (repo/branch/commit/tests)")
+		logx.Warningf("Publish response missing required report (repo/branch/commit/tests); continuing without it (branch_id=%s)", branchID)
+		publishSummary = fmt.Sprintf("Publish report unavailable; inspect Pantheon branch %s for push details.", branchID)
 	}
 	if report != nil {
 		report["publish_report"] = publishSummary
@@ -513,6 +511,30 @@ func reportString(report map[string]any, key string) string {
 	}
 	if v, ok := report[key]; ok && v != nil {
 		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+	return ""
+}
+
+func extractBranchOutput(data map[string]any) string {
+	if data == nil {
+		return ""
+	}
+	branch, _ := data["branch"].(map[string]any)
+	if branch == nil {
+		return ""
+	}
+	if out, _ := branch["output"].(string); strings.TrimSpace(out) != "" {
+		return strings.TrimSpace(out)
+	}
+	if snap, _ := branch["latest_snap"].(map[string]any); snap != nil {
+		if out, _ := snap["output"].(string); strings.TrimSpace(out) != "" {
+			return strings.TrimSpace(out)
+		}
+	}
+	if manifest, _ := branch["manifest"].(map[string]any); manifest != nil {
+		if summary, _ := manifest["summary"].(string); strings.TrimSpace(summary) != "" {
+			return strings.TrimSpace(summary)
+		}
 	}
 	return ""
 }
