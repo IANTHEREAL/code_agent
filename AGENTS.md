@@ -9,7 +9,7 @@
 - Required CLI args: `--parent-branch-id` (source branch UUID); optional `--task`, `--project-name`.
 - Prompted input: if `--task` omitted, CLI requests a task description over stdin.
 - Environment variables (loaded via `internal/config`):
-  - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, optional `AZURE_OPENAI_API_VERSION`.
+  - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, optional `AZURE_OPENAI_API_VERSION`.
   - `MCP_BASE_URL` (defaults to `http://localhost:8000/mcp/sse`).
   - Polling control: `MCP_POLL_INITIAL_SECONDS`, `MCP_POLL_MAX_SECONDS`, `MCP_POLL_TIMEOUT_SECONDS`, `MCP_POLL_BACKOFF_FACTOR`.
   - Workspace context: `PROJECT_NAME`, optional `WORKSPACE_DIR` (defaults `/home/pan/workspace`).

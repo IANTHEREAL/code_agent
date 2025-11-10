@@ -37,12 +37,12 @@ func FromEnv() (AgentConfig, error) {
 		return AgentConfig{}, errors.New("AZURE_OPENAI_API_KEY must be set")
 	}
 
-	endpoint := os.Getenv("AZURE_OPENAI_ENDPOINT")
+	endpoint := os.Getenv("AZURE_OPENAI_BASE_URL")
 	if endpoint == "" {
-		return AgentConfig{}, errors.New("AZURE_OPENAI_ENDPOINT must be set")
+		return AgentConfig{}, errors.New("AZURE_OPENAI_BASE_URL must be set")
 	}
 	if !strings.HasPrefix(endpoint, "https://") {
-		return AgentConfig{}, errors.New("AZURE_OPENAI_ENDPOINT must start with 'https://'")
+		return AgentConfig{}, errors.New("AZURE_OPENAI_BASE_URL must start with 'https://'")
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
 
