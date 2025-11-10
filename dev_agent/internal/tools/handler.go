@@ -205,7 +205,7 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 		}
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
-		if should_wait && (status == "succeed" || status == "failed" || status == "manifesting") {
+		if should_wait && (status == "succeed" || status == "failed") {
 			return resp, nil
 		}
 		if time.Now().After(deadline) {
