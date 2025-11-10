@@ -96,6 +96,14 @@ Ultrathink! Fix all P0/P1 issues reported in the review.
 Ultrathink! Please give your best efforts!
 `
 
+const (
+	statusCompleted      = "completed"
+	statusIterationLimit = "iteration_limit"
+
+	iterationLimitSummary = "Reached iteration limit before clean review sign-off."
+	defaultSuccessSummary = "Workflow completed successfully."
+)
+
 const maxIterations = 8
 
 type publishHandler interface {
@@ -132,7 +140,7 @@ func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[
 		return "", errors.New("unable to determine parent branch id for publish step")
 	}
 
-	outcome := "Reached iteration limit before clean review sign-off."
+	outcome := iterationLimitSummary
 	if success {
 		summary := ""
 		if report != nil {
@@ -143,10 +151,8 @@ func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[
 		if summary != "" {
 			outcome = summary
 		} else {
-			outcome = "Workflow completed successfully."
+			outcome = defaultSuccessSummary
 		}
-	} else {
-		outcome = "Reached iteration limit before clean review sign-off."
 	}
 
 	meta := fmt.Sprintf("commit-meta: start_branch=%s latest_branch=%s", lineage["start_branch_id"], lineage["latest_branch_id"])
@@ -161,7 +167,7 @@ Meta (include in the commit message if helpful): %[4]s
 
 The worklog is located into '%[5]s/worklog.md'.
 
-Choose an appropriate git branch name for this task, commit the related file changes, and reply with the branch name and commit hash. Do not print the raw token anywhere except when configuring git.
+Choose an appropriate git branch name for this task, commit the related file changes, and reply with a concise publish report that MUST include: repository URL, pushed Git branch name, commit hash, and pointers to the latest implementation summary/tests (e.g., '%[5]s/worklog.md' and any test artifact). Do not print the raw token anywhere except when configuring git. If you cannot provide this report, treat the publish as failed.
 
 Publishing rules:
 - Configure git identity (%[6]s).
@@ -198,12 +204,15 @@ Include a short publish report that states the repository URL, branch name, and 
 	if branchID == "" {
 		return "", errors.New("publish execute_agent missing branch id")
 	}
+	publishSummary := ""
+	if respText, ok := data["response"].(string); ok {
+		publishSummary = strings.TrimSpace(respText)
+	}
+	if publishSummary == "" {
+		return "", errors.New("publish response missing required report (repo/branch/commit/tests)")
+	}
 	if report != nil {
-		if respText, ok := data["response"].(string); ok {
-			if summary := strings.TrimSpace(respText); summary != "" {
-				report["publish_report"] = summary
-			}
-		}
+		report["publish_report"] = publishSummary
 		report["publish_pantheon_branch_id"] = branchID
 	}
 	if branchStatus := strings.TrimSpace(fmt.Sprintf("%v", data["status"])); branchStatus != "" {
@@ -310,6 +319,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	}
 
 	if finished {
+		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
 		_, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
 		if err != nil {
 			return nil, err
@@ -317,14 +327,20 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		return finalReport, nil
 	}
 
-	branchID, err := finalizeBranchPush(handler, publishOpts, nil, false)
+	finalReport = map[string]any{
+		"is_finished": false,
+		"status":      statusIterationLimit,
+		"task":        publishOpts.Task,
+		"summary":     iterationLimitSummary,
+	}
+	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
 	if err != nil {
 		return nil, err
 	}
 	if branchID != "" {
 		logx.Infof("Workspace published to branch (branch_id=%s) after iteration limit.", branchID)
 	}
-	return nil, errors.New("reached maximum iterations without final report")
+	return finalReport, nil
 }
 
 func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, maxIters int, publishOpts PublishOptions) (map[string]any, error) {
@@ -397,6 +413,7 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	}
 
 	if finished {
+		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
 		_, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
 		if err != nil {
 			return nil, err
@@ -404,14 +421,98 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 		return finalReport, nil
 	}
 
-	branchID, err := finalizeBranchPush(handler, publishOpts, nil, false)
+	finalReport = map[string]any{
+		"is_finished": false,
+		"status":      statusIterationLimit,
+		"task":        publishOpts.Task,
+		"summary":     iterationLimitSummary,
+	}
+	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
 	if err != nil {
 		return nil, err
 	}
 	if branchID != "" {
 		fmt.Fprintf(os.Stderr, "info: workspace pushed (branch_id=%s)\n", branchID)
 	}
-	return nil, errors.New("reached iteration limit without final report")
+	return finalReport, nil
 }
 
 func toJSON(v any) string { b, _ := json.Marshal(v); return string(b) }
+
+func ensureReportDefaults(report map[string]any, task, status string, finished bool) {
+	if report == nil {
+		return
+	}
+	if _, ok := report["task"]; !ok && task != "" {
+		report["task"] = task
+	}
+	if _, ok := report["status"]; !ok && status != "" {
+		report["status"] = status
+	}
+	if _, ok := report["is_finished"]; !ok {
+		report["is_finished"] = finished
+	}
+}
+
+func BuildInstructions(report map[string]any) string {
+	if report == nil {
+		return ""
+	}
+	start := reportString(report, "start_branch_id")
+	latest := reportString(report, "latest_branch_id")
+	status := reportString(report, "status")
+	publishReport := reportString(report, "publish_report")
+	publishBranch := reportString(report, "publish_pantheon_branch_id")
+
+	var parts []string
+
+	switch {
+	case start != "" && latest != "":
+		if start == latest {
+			parts = append(parts, fmt.Sprintf("Branch lineage: start=%s, latest=%s. Inspect manifest %s in Pantheon to review artifacts.", start, latest, latest))
+		} else {
+			parts = append(parts, fmt.Sprintf("Branch lineage: start=%s → latest=%s. Inspect manifest %s in Pantheon to review artifacts.", start, latest, latest))
+		}
+	case latest != "":
+		parts = append(parts, fmt.Sprintf("Inspect manifest %s in Pantheon to review artifacts.", latest))
+	case start != "":
+		parts = append(parts, fmt.Sprintf("Branch lineage started from %s; inspect it in Pantheon to review artifacts.", start))
+	}
+
+	if publishReport != "" {
+		parts = append(parts, fmt.Sprintf("Publish report describes the GitHub push target: %s", publishReport))
+	}
+
+	if publishBranch != "" {
+		parts = append(parts, fmt.Sprintf("Github Push from pantheon branch: %s.", publishBranch))
+	}
+
+	switch status {
+	case statusIterationLimit:
+		target := latest
+		if target == "" {
+			target = start
+		}
+		if target != "" {
+			parts = append(parts, fmt.Sprintf("Next (if your are allowed or instructed), you can rerun dev-agent with --parent-branch-id %s to continue automated iterations;", target))
+		}
+	default:
+		if publishReport != "" {
+			parts = append(parts, "Next step: review the pushed GitHub branch and, based on your process, proceed with the normal PR/merge workflow.")
+		} else if latest != "" {
+			parts = append(parts, "Next step: review the manifest and test results above, then proceed with whichever merge/publish flow fits your process.")
+		}
+	}
+
+	return strings.TrimSpace(strings.Join(parts, " "))
+}
+
+func reportString(report map[string]any, key string) string {
+	if report == nil {
+		return ""
+	}
+	if v, ok := report[key]; ok && v != nil {
+		return strings.TrimSpace(fmt.Sprintf("%v", v))
+	}
+	return ""
+}

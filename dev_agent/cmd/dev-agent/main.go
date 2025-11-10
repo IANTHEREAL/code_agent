@@ -77,19 +77,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Attach observed branch range
+	// Attach observed branch range and instructions
 	br := handler.BranchRange()
 	if report == nil {
 		report = map[string]any{}
 	}
-	if br["start_branch_id"] != "" {
-		report["start_branch_id"] = br["start_branch_id"]
+	if start, ok := br["start_branch_id"]; ok {
+		report["start_branch_id"] = start
 	}
-	if br["latest_branch_id"] != "" {
-		report["latest_branch_id"] = br["latest_branch_id"]
+	if latest, ok := br["latest_branch_id"]; ok {
+		report["latest_branch_id"] = latest
 	}
 	if _, ok := report["task"]; !ok {
 		report["task"] = tsk
+	}
+	if instr := o.BuildInstructions(report); instr != "" {
+		report["instructions"] = instr
 	}
 
 	out, _ := json.MarshalIndent(report, "", "  ")

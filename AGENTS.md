@@ -54,7 +54,7 @@
 ## Observability and Reporting
 - Logging: informational progress (`LLM iteration`, MCP requests) routed through `logx`.
 - Work artifacts expected at `/home/pan/workspace/worklog.md` and `/home/pan/workspace/codex_review.log` to coordinate Implement/Fix/Review phases.
-- Final CLI output: pretty-printed JSON containing `task`, `summary`, `start_branch_id`, `latest_branch_id`, plus any fields returned by the orchestrator (e.g., `is_finished`).
+- Final CLI output: pretty-printed JSON that always includes `task`, `summary`, `status`, `is_finished`, `start_branch_id`, `latest_branch_id`, and an `instructions` string. The instructions summarize how to act on the result (e.g., inspect the latest Pantheon branch/manifest, read the `publish_report` to find the GitHub branch, or—when `status` is `iteration_limit`—choose between rerunning dev-agent with the latest branch ID or taking manual action). When publishing succeeds the payload also carries `publish_report` and `publish_pantheon_branch_id`. The publish step now enforces a mandatory report from the agent describing the GitHub repository, branch, commit hash, and where to find the implementation/test logs; missing that report fails the publish step.
 
 ## Failure Modes and Safeguards
 - Configuration errors abort before orchestration starts with descriptive stderr messages.
