@@ -29,7 +29,7 @@ go.work.sum
 
 # Dev agent artifacts
 worklog.md
-codex_review.log
+code_review.log
 
 # Editor/IDE
 # .idea/

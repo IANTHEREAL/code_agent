@@ -1,7 +1,7 @@
 # Dev Agent Specification
 
 ## Overview
-- Purpose: automate a disciplined Test-Driven Development workflow by delegating implementation and review tasks to specialist MCP agents (`claude_code` and `codex`).
+- Purpose: automate a disciplined Test-Driven Development workflow by delegating implementation and review tasks to specialist MCP agents (`claude_code` and `review_code`).
 - Entry point: `cmd/dev-agent/main.go` CLI binary. Outputs a structured JSON report summarizing task outcome and observed branch lineage.
 - Operating mode: headless (`--headless` flag) or interactive chat loop mirroring all assistant/tool exchanges to stdout.
 
@@ -21,7 +21,7 @@
 2. Orchestrator loop uses `LLMBrain` (Azure OpenAI Chat Completions) to drive a system prompt enforcing Implement → Review → Fix.
 3. Every `execute_agent` call triggers `MCPClient.parallel_explore`, cloning from the tracked parent branch and creating a new branch lineage.
 4. `ToolHandler` polls branch status until completion, recording results and updating stored branch IDs.
-5. Once `codex` reports zero P0/P1 issues (or iteration limit reached), orchestrator issues a publish prompt to `claude_code` to commit and push the workspace.
+5. Once `review_code` reports zero P0/P1 issues (or iteration limit reached), orchestrator issues a publish prompt to `claude_code` to commit and push the workspace.
 6. Final JSON report includes completion status, summary, original task, branch lineage, and publish metadata (`publish_report`, `publish_pantheon_branch_id`).
 
 ## Component Responsibilities
@@ -48,12 +48,12 @@
 
 ## External Systems and Contracts
 - **Azure OpenAI**: expects Azure-specific REST endpoint; API key provided via header `api-key`.
-- **Pantheon MCP**: accessible via SSE-enabled JSON-RPC; agents named `claude_code` and `codex` must exist remotely.
+- **Pantheon MCP**: accessible via SSE-enabled JSON-RPC; agents named `claude_code` and `review_code` must exist remotely.
 - **GitHub**: branch publish prompt assumes git commands can run inside agent execution, authenticated using `GITHUB_ACCESS_TOKEN`.
 
 ## Observability and Reporting
 - Logging: informational progress (`LLM iteration`, MCP requests) routed through `logx`.
-- Work artifacts expected at `/home/pan/workspace/worklog.md` and `/home/pan/workspace/codex_review.log` to coordinate Implement/Fix/Review phases.
+- Work artifacts expected at `/home/pan/workspace/worklog.md` and `/home/pan/workspace/code_review.log` to coordinate Implement/Fix/Review phases.
 - Final CLI output: pretty-printed JSON that always includes `task`, `summary`, `status`, `is_finished`, `start_branch_id`, `latest_branch_id`, and an `instructions` string. The instructions summarize how to act on the result (e.g., inspect the latest Pantheon branch/manifest, read the `publish_report` to find the GitHub branch, or—when `status` is `iteration_limit`—choose between rerunning dev-agent with the latest branch ID or taking manual action). When publishing succeeds the payload also carries `publish_report` and `publish_pantheon_branch_id`. The publish step now enforces a mandatory report from the agent describing the GitHub repository, branch, commit hash, and where to find the implementation/test logs; missing that report fails the publish step.
 
 ## Failure Modes and Safeguards

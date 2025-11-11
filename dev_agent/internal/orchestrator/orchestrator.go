@@ -18,18 +18,18 @@ const systemPromptTemplate = `You are a TDD (Test-Drive Development) workflow or
 
 ### Agents
 * **claude_code**: Implements solutions and tests. Summarizes work in '%[1]s/worklog.md'.
-* **codex**: Reviews code for P0/P1 issues. Records findings in '%[1]s/worklog.md' and '%[1]s/codex_review.log'.
+* **review_code**: Reviews code for P0/P1 issues. Records findings in '%[1]s/worklog.md' and '%[1]s/code_review.log'.
 
 ### Workflow
 1.  **Implement (claude_code)**: Implement the solution and matching tests for the user's task.
-2.  **Review (codex)**: Review the implementation for P0/P1 issues.
+2.  **Review (review_code)**: Review the implementation for P0/P1 issues.
 3.  **Fix (claude_code)**: If issues are found, fix all P0/P1 issues and ensure tests pass.
-4.  Repeat **Review** and **Fix** until 'codex' reports no P0/P1 issues.
+4.  Repeat **Review** and **Fix** until 'review_code' agent reports no P0/P1 issues.
 
 ### Your Orchestration Rules
 1.  **Call Agents**: For each workflow step, call 'execute_agent'.
 2.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
-3.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from 'codex_review.log'.
+3.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from 'code_review.log'.
 
 ### Agent Prompt Templates
 
@@ -57,7 +57,7 @@ Remeber you are linus, hate over engineering.
 Ultrathink! Please give your best efforts!
 ---
 
-#### Review (codex)
+#### Review (review_code)
 
 You are a expert engineer, perform a comprehensive code review to find P0 and P1 issues.
 
@@ -85,14 +85,14 @@ You are a expert engineer, perform a comprehensive code review to find P0 and P1
 Ultrathink! Fix all P0/P1 issues reported in the review.
 
 **Issues to Fix**:
-[List of P0/P1 issues from '%[1]s/codex_review.log']
+[List of P0/P1 issues from '%[1]s/code_review.log']
 
 **Original User Task**: [The user's original task description - must be passed on exactly as is]
 
 **Final Step**: After fixing all issues, append a summary of the fixes to '%[1]s/worklog.md'.
 
 ### Completion
-* Stop Condition: Stop when a codex Review run reports no P0/P1 issues.
+* Stop Condition: Stop when a review_code run reports no P0/P1 issues.
 * Final Output: Reply with JSON only (no other text): {"is_finished": true, "task":"<original user task description>","summary":"<Concise outcome, e.g., 'Implementation and review complete. No P0/P1 issues found.'>"}
 
 Ultrathink! Please give your best efforts!
@@ -179,7 +179,7 @@ Publishing rules:
 - Keep the commit subject <= 72 characters and meaningful.
 - Unset exported credentials after pushing.
 - Git push must be fully non-interactive. Rewrite the existing 'origin' remote to include the GitHub token (example: "CURRENT=$(git remote get-url origin); git remote set-url origin https://<github-username>:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git"), run "git push -u origin <branch>", then restore the original remote URL. Do not print the raw token in logs.
-- Do not stage or commit '%[5]s/worklog.md' or '%[5]s/codex_review.log'.
+- Do not stage or commit '%[5]s/worklog.md' or '%[5]s/code_review.log'.
 
 Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, opts.WorkspaceDir, identityInstruction)
 
@@ -232,7 +232,7 @@ func BuildInitialMessages(task, projectName, workspaceDir, parentBranchID string
 		"parent_branch_id": parentBranchID,
 		"project_name":     projectName,
 		"workspace_dir":    workspaceDir,
-		"notes":            "For every phase: craft an execute_agent prompt covering task, phase goal, context. Track branch lineage and stop when codex reports no P0/P1 issues.",
+		"notes":            "For every phase: craft an execute_agent prompt covering task, phase goal, context. Track branch lineage and stop when review_code reports no P0/P1 issues.",
 	}
 	content, _ := json.MarshalIndent(userPayload, "", "  ")
 	return []b.ChatMessage{
@@ -292,7 +292,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 				messages = append(messages, toolMsg)
 
 				if tc.Function.Name == "execute_agent" {
-					if agent, _ := args["agent"].(string); agent == "codex" {
+					if agent, _ := args["agent"].(string); agent == "review_code" {
 						if status, _ := result["status"].(string); status == "success" {
 							reviewCompleted = true
 						}
@@ -386,7 +386,7 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 				messages = append(messages, b.ChatMessage{Role: "tool", ToolCallID: tc.ID, Content: toJSON(result)})
 
 				if tc.Function.Name == "execute_agent" {
-					if agent, _ := args["agent"].(string); agent == "codex" {
+					if agent, _ := args["agent"].(string); agent == "review_code" {
 						if status, _ := result["status"].(string); status == "success" {
 							reviewCompleted = true
 						}
