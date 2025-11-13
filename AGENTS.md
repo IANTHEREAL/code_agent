@@ -13,7 +13,7 @@
   - `MCP_BASE_URL` (defaults to `http://localhost:8000/mcp/sse`).
   - Polling control: `MCP_POLL_INITIAL_SECONDS`, `MCP_POLL_MAX_SECONDS`, `MCP_POLL_TIMEOUT_SECONDS`, `MCP_POLL_BACKOFF_FACTOR`.
   - Workspace context: `PROJECT_NAME`, optional `WORKSPACE_DIR` (defaults `/home/pan/workspace`).
-  - `GITHUB_ACCESS_TOKEN` for final branch publish.
+  - `GITHUB_TOKEN` for final branch publish.
 - Optional `.env` file at repo root is loaded first, non-destructively.
 
 ## High-Level Workflow
@@ -49,7 +49,7 @@
 ## External Systems and Contracts
 - **Azure OpenAI**: expects Azure-specific REST endpoint; API key provided via header `api-key`.
 - **Pantheon MCP**: accessible via SSE-enabled JSON-RPC; agents named `claude_code` and `codex` must exist remotely.
-- **GitHub**: branch publish prompt assumes git commands can run inside agent execution, authenticated using `GITHUB_ACCESS_TOKEN`.
+- **GitHub**: branch publish prompt assumes git commands can run inside agent execution, authenticated using `GITHUB_TOKEN`.
 
 ## Observability and Reporting
 - Logging: informational progress (`LLM iteration`, MCP requests) routed through `logx`.
