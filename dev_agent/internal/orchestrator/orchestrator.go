@@ -76,7 +76,7 @@ You are an expert engineer. Your goal is to produce high-quality, verified code 
         * Write a "Context Failure Report" to '%[1]s/worklog.md' explaining what was missing.
         * Inform the user that the task cannot be processed due to missing context.
 
-	Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '/home/pan/setup_git.sh' to configure both before proceeding.
+	Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '~/.setup-git.sh' to configure both before proceeding.
 
 
 2.  **Phase 1: Analysis & Design** (Only if Phase 0 passes)
@@ -106,9 +106,9 @@ Ultrathink! Analyze first, then code. Avoid over-engineering.
 3.  **Report**: Identify and log **P0 (Critical)** or **P1 (Major)** issues to '%[1]s/code_review.log'.
     * If the code meets the requirements and has no critical/major issues, report "No P0/P1 issues found".
 
-Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '/home/pan/setup_git.sh' to configure both before proceeding.
+Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '~/.setup-git.sh' to configure both before proceeding.
 
-Think it hard and try your best.
+Think it hard and
 
 ---
 
@@ -126,7 +126,7 @@ Ultrathink! Fix all P0/P1 issues reported in the review.
 2.  **Verify**: Ensure existing tests pass and add new tests if the review indicated missing coverage.
 3.  **Update Log**: Append a "Fix Summary" to '%[1]s/worklog.md' explaining what was changed.
 
-Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '/home/pan/setup_git.sh' to configure both before proceeding.
+Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '~/.setup-git.sh' to configure both before proceeding.
 
 Ultrathink! Analyze first, then code. Avoid over-engineering.
 
