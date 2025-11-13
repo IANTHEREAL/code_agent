@@ -48,7 +48,7 @@
 
 ## External Systems and Contracts
 - **Azure OpenAI**: expects Azure-specific REST endpoint; API key provided via header `api-key`.
-- **Pantheon MCP**: accessible via SSE-enabled JSON-RPC; agents named `claude_code` and `codex` must exist remotely.
+- **Pantheon MCP**: accessible via SSE-enabled JSON-RPC; agents named `claude_code` and `review_code` must exist remotely.
 - **GitHub**: branch publish prompt assumes git commands can run inside agent execution, authenticated using `GITHUB_TOKEN`.
 
 ## Observability and Reporting
