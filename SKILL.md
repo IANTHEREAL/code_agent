@@ -5,7 +5,7 @@
 - `parent_branch_id`
 
 ## Funtional
-- Delegate work to specialist agents (`claude_code`, `codex`) via pantheon mcp tool `parallel_explore`.
+- Delegate work to specialist agents (`claude_code`, `review_code`) via pantheon mcp tool `parallel_explore`.
 - Enforce the TDD workflow: implement → review → fix.
 - Provide a final detailed report for implementation.
 
