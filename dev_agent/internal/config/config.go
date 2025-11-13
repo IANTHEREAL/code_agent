@@ -89,9 +89,9 @@ func FromEnv() (AgentConfig, error) {
 		backoff = f
 	}
 
-	githubToken := os.Getenv("GITHUB_ACCESS_TOKEN")
+	githubToken := os.Getenv("GITHUB_TOKEN")
 	if githubToken == "" {
-		return AgentConfig{}, errors.New("GITHUB_ACCESS_TOKEN must be set")
+		return AgentConfig{}, errors.New("GITHUB_TOKEN must be set")
 	}
 
 	gitUserName := strings.TrimSpace(os.Getenv("GIT_AUTHOR_NAME"))
