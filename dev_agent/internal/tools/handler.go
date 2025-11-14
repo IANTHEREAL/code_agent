@@ -290,13 +290,10 @@ func GetToolDefinitions() []map[string]any {
 				"parameters": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"agent":                     map[string]any{"type": "string", "description": "Target specialist agent name."},
-						"prompt":                    map[string]any{"type": "string", "description": "Prompt for the agent."},
-						"project_name":              map[string]any{"type": "string", "description": "Pantheon project name."},
-						"parent_branch_id":          map[string]any{"type": "string", "description": "Branch UUID to branch from."},
-						"timeout_seconds":           map[string]any{"type": "number", "description": "Optional override for completion polling timeout."},
-						"poll_interval_seconds":     map[string]any{"type": "number", "description": "Optional override for initial poll interval."},
-						"max_poll_interval_seconds": map[string]any{"type": "number", "description": "Optional override for maximum poll interval."},
+						"agent":            map[string]any{"type": "string", "description": "Target specialist agent name."},
+						"prompt":           map[string]any{"type": "string", "description": "Prompt for the agent."},
+						"project_name":     map[string]any{"type": "string", "description": "Pantheon project name."},
+						"parent_branch_id": map[string]any{"type": "string", "description": "Branch UUID to branch from."},
 					},
 					"required": []any{"agent", "prompt", "project_name", "parent_branch_id"},
 				},
