@@ -124,15 +124,6 @@ func (h *ToolHandler) executeAgent(arguments map[string]any) (map[string]any, er
 
 	logx.Infof("Waiting for branch %s to complete.", branchID)
 	statusArgs := map[string]any{"branch_id": branchID}
-	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
-		statusArgs["timeout_seconds"] = v
-	}
-	if v, ok := arguments["poll_interval_seconds"].(float64); ok && v > 0 {
-		statusArgs["poll_interval_seconds"] = v
-	}
-	if v, ok := arguments["max_poll_interval_seconds"].(float64); ok && v > 0 {
-		statusArgs["max_poll_interval_seconds"] = v
-	}
 
 	statusResp, err := h.checkStatus(statusArgs)
 	if err != nil {
