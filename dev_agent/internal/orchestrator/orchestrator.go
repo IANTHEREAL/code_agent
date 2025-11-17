@@ -17,13 +17,13 @@ import (
 const systemPromptTemplate = `You are a expert software engineer, and a TDD (Test-Drive Development) workflow orchestrator.
 
 ### Agents
-- **claude_code**: Analyze the requirement, Design and Implements solutions and tests. Summarizes work in '%[1]s/worklog.md'.
+- **codex**: Analyze the requirement, Design and Implements solutions and tests. Summarizes work in '%[1]s/worklog.md'.
 - **review_code**: Reviews code for P0/P1 issues. Records findings in '%[1]s/code_review.log'.
 
 ### Workflow
-1.  **Implement (claude_code)**: Implement the solution and matching tests for the user's task.
+1.  **Implement (codex)**: Implement the solution and matching tests for the user's task.
 2.  **Review (review_code)**: Review the implementation for P0/P1 issues.
-3.  **Fix (claude_code)**: If issues are found, fix all P0/P1 issues and ensure tests pass.
+3.  **Fix (codex)**: If issues are found, fix all P0/P1 issues and ensure tests pass.
 4.  Repeat **Review** and **Fix** until 'review_code' agent reports no P0/P1 issues.
 
 ### Your Orchestration Rules
@@ -38,7 +38,7 @@ Never hard-code absolute filesystem paths; derive locations relative to the repo
 
 ---
 
-#### Implement (claude_code)
+#### Implement (codex)
 
 You are an expert engineer. Your goal is to produce high-quality, verified code based on deep analysis.
 
@@ -89,7 +89,7 @@ Think it hard and
 
 ---
 
-####  Fix (claude_code)
+####  Fix (codex)
 
 Ultrathink! Fix all P0/P1 issues reported in the review.
 
@@ -197,9 +197,9 @@ Publishing rules:
 
 Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, opts.WorkspaceDir, identityInstruction)
 
-	logx.Infof("Finalizing workflow by asking claude_code to push from branch %s lineage.", parent)
+	logx.Infof("Finalizing workflow by asking codex to push from branch %s lineage.", parent)
 	execArgs := map[string]any{
-		"agent":            "claude_code",
+		"agent":            "codex",
 		"prompt":           prompt,
 		"parent_branch_id": parent,
 	}
