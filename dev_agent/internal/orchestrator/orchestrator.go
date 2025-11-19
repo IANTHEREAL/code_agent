@@ -139,7 +139,7 @@ type PublishOptions struct {
 	GitUserEmail   string
 }
 
-func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool, streamer *s.JSONStreamer, execItemID string) (string, error) {
+func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool) (string, error) {
 	if opts.GitHubToken == "" {
 		return "", errors.New("missing GitHub token for publish step")
 	}
@@ -213,15 +213,7 @@ Include a short publish report that states the repository URL, branch name, and 
 	execCall.Function.Name = "execute_agent"
 	execCall.Function.Arguments = string(argsBytes)
 
-	start := time.Now()
-	displayName := toolDisplayName("execute_agent", execArgs)
-	if execItemID != "" {
-		emitItemStarted(streamer, execItemID, "tool_call", displayName, sanitizeArguments("execute_agent", execArgs))
-	}
 	execResp := handler.Handle(execCall)
-	if execItemID != "" {
-		emitItemCompleted(streamer, execItemID, "tool_call", displayName, execResp, time.Since(start))
-	}
 	if status, _ := execResp["status"].(string); status != "success" {
 		return "", fmt.Errorf("publish execute_agent failed: %v", execResp)
 	}
@@ -364,11 +356,14 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	if finished {
 		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
 		publishItemID := nextItemID(&itemCounter)
-		publishExecItemID := nextItemID(&itemCounter)
 		publishStart := time.Now()
-		emitPublishStarted(streamer, publishItemID, publishOpts)
-		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true, streamer, publishExecItemID)
-		emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
+		parentBranch := resolvePublishParent(handler, publishOpts)
+		eventArgs := publishEventArgs(parentBranch, publishOpts)
+		emitItemStarted(streamer, publishItemID, "tool_call", "publish", eventArgs)
+		localOpts := publishOpts
+		localOpts.ParentBranchID = parentBranch
+		branchID, err := finalizeBranchPush(handler, localOpts, finalReport, true)
+		emitItemCompleted(streamer, publishItemID, "tool_call", "publish", publishResultPayload(branchID, finalReport, err), time.Since(publishStart))
 		if err != nil {
 			return nil, err
 		}
@@ -382,11 +377,14 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		"summary":     iterationLimitSummary,
 	}
 	publishItemID := nextItemID(&itemCounter)
-	publishExecItemID := nextItemID(&itemCounter)
 	publishStart := time.Now()
-	emitPublishStarted(streamer, publishItemID, publishOpts)
-	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false, streamer, publishExecItemID)
-	emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
+	parentBranch := resolvePublishParent(handler, publishOpts)
+	eventArgs := publishEventArgs(parentBranch, publishOpts)
+	emitItemStarted(streamer, publishItemID, "tool_call", "publish", eventArgs)
+	localOpts := publishOpts
+	localOpts.ParentBranchID = parentBranch
+	branchID, err := finalizeBranchPush(handler, localOpts, finalReport, false)
+	emitItemCompleted(streamer, publishItemID, "tool_call", "publish", publishResultPayload(branchID, finalReport, err), time.Since(publishStart))
 	if err != nil {
 		return nil, err
 	}
@@ -487,11 +485,14 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	if finished {
 		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
 		publishItemID := nextItemID(&itemCounter)
-		publishExecItemID := nextItemID(&itemCounter)
 		publishStart := time.Now()
-		emitPublishStarted(streamer, publishItemID, publishOpts)
-		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true, streamer, publishExecItemID)
-		emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
+		parentBranch := resolvePublishParent(handler, publishOpts)
+		eventArgs := publishEventArgs(parentBranch, publishOpts)
+		emitItemStarted(streamer, publishItemID, "tool_call", "publish", eventArgs)
+		localOpts := publishOpts
+		localOpts.ParentBranchID = parentBranch
+		branchID, err := finalizeBranchPush(handler, localOpts, finalReport, true)
+		emitItemCompleted(streamer, publishItemID, "tool_call", "publish", publishResultPayload(branchID, finalReport, err), time.Since(publishStart))
 		if err != nil {
 			return nil, err
 		}
@@ -505,11 +506,14 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 		"summary":     iterationLimitSummary,
 	}
 	publishItemID := nextItemID(&itemCounter)
-	publishExecItemID := nextItemID(&itemCounter)
 	publishStart := time.Now()
-	emitPublishStarted(streamer, publishItemID, publishOpts)
-	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false, streamer, publishExecItemID)
-	emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
+	parentBranch := resolvePublishParent(handler, publishOpts)
+	eventArgs := publishEventArgs(parentBranch, publishOpts)
+	emitItemStarted(streamer, publishItemID, "tool_call", "publish", eventArgs)
+	localOpts := publishOpts
+	localOpts.ParentBranchID = parentBranch
+	branchID, err := finalizeBranchPush(handler, localOpts, finalReport, false)
+	emitItemCompleted(streamer, publishItemID, "tool_call", "publish", publishResultPayload(branchID, finalReport, err), time.Since(publishStart))
 	if err != nil {
 		return nil, err
 	}
@@ -706,71 +710,6 @@ func emitItemCompleted(streamer *s.JSONStreamer, itemID, kind, name string, resu
 	streamer.Emit("item.completed", payload)
 }
 
-func emitPublishStarted(streamer *s.JSONStreamer, itemID string, opts PublishOptions) {
-	if streamer == nil || !streamer.Enabled() {
-		return
-	}
-	args := map[string]any{}
-	if opts.ParentBranchID != "" {
-		args["parent_branch_id"] = opts.ParentBranchID
-	}
-	if opts.ProjectName != "" {
-		args["project_name"] = opts.ProjectName
-	}
-	if opts.WorkspaceDir != "" {
-		args["workspace_dir"] = opts.WorkspaceDir
-	}
-	emitItemStarted(streamer, itemID, "publish", "finalize_branch_push", args)
-	streamer.Emit("publish.started", args)
-}
-
-func emitPublishCompleted(streamer *s.JSONStreamer, itemID, branchID string, report map[string]any, err error, duration time.Duration) {
-	if streamer == nil || !streamer.Enabled() {
-		return
-	}
-	status := "success"
-	if err != nil {
-		status = "error"
-	}
-	publishReport := ""
-	if report != nil {
-		if s, ok := report["publish_report"].(string); ok && strings.TrimSpace(s) != "" {
-			publishReport = strings.TrimSpace(s)
-		}
-	}
-	itemPayload := map[string]any{
-		"item_id":     itemID,
-		"kind":        "publish",
-		"name":        "finalize_branch_push",
-		"status":      status,
-		"duration_ms": duration.Milliseconds(),
-	}
-	if branchID != "" {
-		itemPayload["branch_id"] = branchID
-	}
-	if publishReport != "" {
-		itemPayload["summary"] = publishReport
-	}
-	if err != nil {
-		itemPayload["error"] = err.Error()
-	}
-	streamer.Emit("item.completed", itemPayload)
-
-	pubPayload := map[string]any{
-		"status": status,
-	}
-	if branchID != "" {
-		pubPayload["branch_id"] = branchID
-	}
-	if publishReport != "" {
-		pubPayload["publish_report"] = publishReport
-	}
-	if err != nil {
-		pubPayload["error"] = err.Error()
-	}
-	streamer.Emit("publish.completed", pubPayload)
-}
-
 func emitErrorEvent(streamer *s.JSONStreamer, scope, message string, extra map[string]any) {
 	if streamer == nil || !streamer.Enabled() {
 		return
@@ -830,6 +769,52 @@ func toolDisplayName(toolName string, args map[string]any) string {
 		}
 	}
 	return toolName
+}
+
+func resolvePublishParent(handler publishHandler, opts PublishOptions) string {
+	if handler != nil {
+		if lineage := handler.BranchRange(); lineage != nil {
+			if latest := lineage["latest_branch_id"]; latest != "" {
+				return latest
+			}
+		}
+	}
+	return opts.ParentBranchID
+}
+
+func publishEventArgs(parent string, opts PublishOptions) map[string]any {
+	args := map[string]any{}
+	if parent != "" {
+		args["parent_branch_id"] = parent
+	}
+	if opts.ProjectName != "" {
+		args["project_name"] = opts.ProjectName
+	}
+	if opts.WorkspaceDir != "" {
+		args["workspace_dir"] = opts.WorkspaceDir
+	}
+	return args
+}
+
+func publishResultPayload(branchID string, report map[string]any, err error) map[string]any {
+	if err != nil {
+		return map[string]any{"status": "error", "error": err.Error()}
+	}
+	payload := map[string]any{"status": "success"}
+	data := map[string]any{}
+	if branchID != "" {
+		payload["branch_id"] = branchID
+		data["branch_id"] = branchID
+	}
+	if report != nil {
+		if pr, ok := report["publish_report"].(string); ok && strings.TrimSpace(pr) != "" {
+			data["branch"] = map[string]any{"output": strings.TrimSpace(pr)}
+		}
+	}
+	if len(data) > 0 {
+		payload["data"] = data
+	}
+	return payload
 }
 
 func emitAssistantMessage(streamer *s.JSONStreamer, turnID, content string, toolCallCount int) {

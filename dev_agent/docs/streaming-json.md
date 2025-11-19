@@ -46,16 +46,14 @@ If streaming is disabled we keep the existing text logs plus the final pretty JS
 | `turn.started` | Before each call to Azure OpenAI (`LLMBrain.Complete`). | `turn_id`, `iteration`, `message_count`, `tool_count` |
 | `assistant.message` | Immediately after the LLM responds. Includes a short preview so dashboards can show reasoning text. | `turn_id`, `preview`, `tool_call_count` |
 | `turn.completed` | After each iteration finishes handling any tool calls/final report. | `turn_id`, `iteration`, `tool_call_count`, `has_final_report` |
-| `item.started` | Immediately before dispatching a tool call (e.g., `execute_agent`, `read_artifact`, `parallel_explore`). | `item_id`, `kind` (`"tool_call"`, `"publish"`, `"branch_poll"` …), `name`, `args` |
-| `item.completed` | After the tool call/publish finishes. | `item_id`, `status` (`"success"`, `"error"`), `duration_ms`, `branch_id` (if available), `summary` |
-| `publish.started` | Alias event fired alongside `item.started` when the publish prompt is kicked off. | `parent_branch_id`, `workspace_dir` |
-| `publish.completed` | After publish agent returns. | `branch_id`, `publish_report` |
+| `item.started` | Immediately before dispatching a tool call (e.g., `execute_agent`, `read_artifact`, `parallel_explore`, `publish`). | `item_id`, `kind` (`"tool_call"`, `"branch_poll"` …), `name`, `args` |
+| `item.completed` | After the tool call (including publish) finishes. | `item_id`, `status` (`"success"`, `"error"`), `duration_ms`, `branch_id` (if available), `summary` |
 | `thread.completed` | After orchestration stops (either success, iteration limit, or fatal error) but **before** printing the final pretty JSON. | `status`, `summary`, `final_report` |
 | `error` | Whenever orchestration returns an error (LLM failure, MCP failure, publish failure). | `scope`, `message`, optional `iteration`/`item_id` |
 
 Notes:
 - `assistant.message` truncates long responses (currently 500 chars) to keep logs readable.
-- `item.*` events mirror Codex’ `command_execution` concept. `args` include safe metadata plus a short `prompt_preview` (max ~240 chars) for `execute_agent` calls; secrets such as tokens are never emitted.
+- `item.*` events mirror Codex’ `command_execution` concept. `args` include safe metadata plus a short `prompt_preview` (max ~240 chars) for `execute_agent` calls; secrets such as tokens are never emitted. Publish shows up as `item.*` with `name":"publish"` so there are no extra alias events.
 - Additional helper events can be added later (e.g., `log`, `review.iteration`).
 
 ## Sample NDJSON Flow
