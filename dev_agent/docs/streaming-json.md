@@ -43,8 +43,9 @@ If streaming is disabled we keep the existing text logs plus the final pretty JS
 | Event | When emitted | Required fields |
 |-------|--------------|-----------------|
 | `thread.started` | After CLI config/inputs resolved, before first LLM turn. | `task`, `project_name`, `parent_branch_id`, `headless` |
-| `turn.started` | Before each call to Azure OpenAI (`LLMBrain.Complete`). | `turn_id`, `iteration`, `message_count`, `tool_count` (planned) |
-| `turn.completed` | After each successful completion. | `turn_id`, `iteration`, `tool_call_count`, `has_final_report` |
+| `turn.started` | Before each call to Azure OpenAI (`LLMBrain.Complete`). | `turn_id`, `iteration`, `message_count`, `tool_count` |
+| `assistant.message` | Immediately after the LLM responds. Includes a short preview so dashboards can show reasoning text. | `turn_id`, `preview`, `tool_call_count` |
+| `turn.completed` | After each iteration finishes handling any tool calls/final report. | `turn_id`, `iteration`, `tool_call_count`, `has_final_report` |
 | `item.started` | Immediately before dispatching a tool call (e.g., `execute_agent`, `read_artifact`, `parallel_explore`). | `item_id`, `kind` (`"tool_call"`, `"publish"`, `"branch_poll"` …), `name`, `args` |
 | `item.completed` | After the tool call/publish finishes. | `item_id`, `status` (`"success"`, `"error"`), `duration_ms`, `branch_id` (if available), `summary` |
 | `publish.started` | Alias event fired alongside `item.started` when the publish prompt is kicked off. | `parent_branch_id`, `workspace_dir` |
@@ -53,8 +54,8 @@ If streaming is disabled we keep the existing text logs plus the final pretty JS
 | `error` | Whenever orchestration returns an error (LLM failure, MCP failure, publish failure). | `scope`, `message`, optional `iteration`/`item_id` |
 
 Notes:
-- `item.*` events mirror Codex’ `command_execution` concept. `args` must be safe to
-  log (omit secrets; redact GitHub token from publish prompts).
+- `assistant.message` truncates long responses (currently 500 chars) to keep logs readable.
+- `item.*` events mirror Codex’ `command_execution` concept. `args` include safe metadata plus a short `prompt_preview` (max ~240 chars) for `execute_agent` calls; secrets such as tokens are never emitted.
 - Additional helper events can be added later (e.g., `log`, `review.iteration`).
 
 ## Sample NDJSON Flow

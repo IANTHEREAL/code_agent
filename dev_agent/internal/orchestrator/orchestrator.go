@@ -139,7 +139,7 @@ type PublishOptions struct {
 	GitUserEmail   string
 }
 
-func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool) (string, error) {
+func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool, streamer *s.JSONStreamer, execItemID string) (string, error) {
 	if opts.GitHubToken == "" {
 		return "", errors.New("missing GitHub token for publish step")
 	}
@@ -213,7 +213,15 @@ Include a short publish report that states the repository URL, branch name, and 
 	execCall.Function.Name = "execute_agent"
 	execCall.Function.Arguments = string(argsBytes)
 
+	start := time.Now()
+	displayName := toolDisplayName("execute_agent", execArgs)
+	if execItemID != "" {
+		emitItemStarted(streamer, execItemID, "tool_call", displayName, sanitizeArguments("execute_agent", execArgs))
+	}
 	execResp := handler.Handle(execCall)
+	if execItemID != "" {
+		emitItemCompleted(streamer, execItemID, "tool_call", displayName, execResp, time.Since(start))
+	}
 	if status, _ := execResp["status"].(string); status != "success" {
 		return "", fmt.Errorf("publish execute_agent failed: %v", execResp)
 	}
@@ -296,15 +304,10 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		}
 		choice := resp.Choices[0].Message
 		messages = append(messages, assistantMessageToDict(choice))
-		hasFinal := false
-		if len(choice.ToolCalls) == 0 {
-			if _, ok := ParseFinalReport(choice); ok {
-				hasFinal = true
-			}
-		}
-		emitTurnCompleted(streamer, turnID, i, len(choice.ToolCalls), hasFinal)
+		emitAssistantMessage(streamer, turnID, choice.Content, len(choice.ToolCalls))
+		toolCallCount := len(choice.ToolCalls)
 
-		if len(choice.ToolCalls) > 0 {
+		if toolCallCount > 0 {
 			reviewCompleted := false
 			for _, tc := range choice.ToolCalls {
 				var args map[string]any
@@ -315,10 +318,12 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 				htc.Function.Name = tc.Function.Name
 				htc.Function.Arguments = tc.Function.Arguments
 				itemID := nextItemID(&itemCounter)
-				emitItemStarted(streamer, itemID, "tool_call", tc.Function.Name, sanitizeArguments(tc.Function.Name, args))
+				displayName := toolDisplayName(tc.Function.Name, args)
+				safeArgs := sanitizeArguments(tc.Function.Name, args)
+				emitItemStarted(streamer, itemID, "tool_call", displayName, safeArgs)
 				start := time.Now()
 				result := handler.Handle(htc)
-				emitItemCompleted(streamer, itemID, "tool_call", tc.Function.Name, result, time.Since(start))
+				emitItemCompleted(streamer, itemID, "tool_call", displayName, result, time.Since(start))
 				toolMsg := b.ChatMessage{Role: "tool", ToolCallID: tc.ID, Content: toJSON(result)}
 				messages = append(messages, toolMsg)
 
@@ -330,31 +335,39 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 					}
 				}
 			}
+			shouldBreak := false
 			if reviewCompleted {
 				reviewCount++
 				logx.Infof("Completed review iteration %d/%d", reviewCount, maxIterations)
 				if reviewCount >= maxIterations {
 					logx.Errorf("Reached review iteration limit without final report.")
-					break
+					shouldBreak = true
 				}
+			}
+			emitTurnCompleted(streamer, turnID, i, toolCallCount, false)
+			if shouldBreak {
+				break
 			}
 			continue
 		}
 
 		if fr, ok := ParseFinalReport(choice); ok {
+			emitTurnCompleted(streamer, turnID, i, toolCallCount, true)
 			finalReport = fr
 			finished = true
 			break
 		}
+		emitTurnCompleted(streamer, turnID, i, toolCallCount, false)
 		logx.Infof("Assistant response was not a final report; continuing.")
 	}
 
 	if finished {
 		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
 		publishItemID := nextItemID(&itemCounter)
+		publishExecItemID := nextItemID(&itemCounter)
 		publishStart := time.Now()
 		emitPublishStarted(streamer, publishItemID, publishOpts)
-		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true, streamer, publishExecItemID)
 		emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 		if err != nil {
 			return nil, err
@@ -369,9 +382,10 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		"summary":     iterationLimitSummary,
 	}
 	publishItemID := nextItemID(&itemCounter)
+	publishExecItemID := nextItemID(&itemCounter)
 	publishStart := time.Now()
 	emitPublishStarted(streamer, publishItemID, publishOpts)
-	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
+	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false, streamer, publishExecItemID)
 	emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 	if err != nil {
 		return nil, err
@@ -408,15 +422,10 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 			fmt.Printf("assistant> %s\n", choice.Content)
 		}
 		messages = append(messages, assistantMessageToDict(choice))
-		hasFinal := false
-		if len(choice.ToolCalls) == 0 {
-			if _, ok := ParseFinalReport(choice); ok {
-				hasFinal = true
-			}
-		}
-		emitTurnCompleted(streamer, turnID, i, len(choice.ToolCalls), hasFinal)
+		emitAssistantMessage(streamer, turnID, choice.Content, len(choice.ToolCalls))
+		toolCallCount := len(choice.ToolCalls)
 
-		if len(choice.ToolCalls) > 0 {
+		if toolCallCount > 0 {
 			reviewCompleted := false
 			for _, tc := range choice.ToolCalls {
 				fmt.Printf("tool> %s %s\n", tc.Function.Name, tc.Function.Arguments)
@@ -428,10 +437,12 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 				htc.Function.Name = tc.Function.Name
 				htc.Function.Arguments = tc.Function.Arguments
 				itemID := nextItemID(&itemCounter)
-				emitItemStarted(streamer, itemID, "tool_call", tc.Function.Name, sanitizeArguments(tc.Function.Name, args))
+				displayName := toolDisplayName(tc.Function.Name, args)
+				safeArgs := sanitizeArguments(tc.Function.Name, args)
+				emitItemStarted(streamer, itemID, "tool_call", displayName, safeArgs)
 				start := time.Now()
 				result := handler.Handle(htc)
-				emitItemCompleted(streamer, itemID, "tool_call", tc.Function.Name, result, time.Since(start))
+				emitItemCompleted(streamer, itemID, "tool_call", displayName, result, time.Since(start))
 				js := toJSON(result)
 				if len(js) > 2000 {
 					js = js[:2000]
@@ -447,31 +458,39 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 					}
 				}
 			}
+			shouldBreak := false
 			if reviewCompleted {
 				reviewCount++
 				fmt.Printf("note: completed review iteration %d/%d\n", reviewCount, maxIters)
 				if reviewCount >= maxIters {
 					logx.Errorf("Reached review iteration limit without final report.")
-					break
+					shouldBreak = true
 				}
+			}
+			emitTurnCompleted(streamer, turnID, i, toolCallCount, false)
+			if shouldBreak {
+				break
 			}
 			continue
 		}
 		if fr, ok := ParseFinalReport(choice); ok {
+			emitTurnCompleted(streamer, turnID, i, toolCallCount, true)
 			finalReport = fr
 			finished = true
 			fmt.Println("assistant< final_report")
 			break
 		}
+		emitTurnCompleted(streamer, turnID, i, toolCallCount, false)
 		fmt.Println("assistant< not final yet, continuing...")
 	}
 
 	if finished {
 		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
 		publishItemID := nextItemID(&itemCounter)
+		publishExecItemID := nextItemID(&itemCounter)
 		publishStart := time.Now()
 		emitPublishStarted(streamer, publishItemID, publishOpts)
-		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true, streamer, publishExecItemID)
 		emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 		if err != nil {
 			return nil, err
@@ -486,9 +505,10 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 		"summary":     iterationLimitSummary,
 	}
 	publishItemID := nextItemID(&itemCounter)
+	publishExecItemID := nextItemID(&itemCounter)
 	publishStart := time.Now()
 	emitPublishStarted(streamer, publishItemID, publishOpts)
-	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
+	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false, streamer, publishExecItemID)
 	emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 	if err != nil {
 		return nil, err
@@ -779,6 +799,9 @@ func sanitizeArguments(toolName string, args map[string]any) map[string]any {
 		copyIfPresent(safe, args, "parent_branch_id")
 		copyIfPresent(safe, args, "project_name")
 		copyIfPresent(safe, args, "branch_id")
+		if prompt, ok := args["prompt"].(string); ok && strings.TrimSpace(prompt) != "" {
+			safe["prompt_preview"] = truncateString(prompt, 240)
+		}
 	default:
 		for k, v := range args {
 			low := strings.ToLower(k)
@@ -798,4 +821,39 @@ func copyIfPresent(dst, src map[string]any, key string) {
 	if val, ok := src[key]; ok {
 		dst[key] = val
 	}
+}
+
+func toolDisplayName(toolName string, args map[string]any) string {
+	if strings.EqualFold(toolName, "execute_agent") {
+		if agent, _ := args["agent"].(string); agent != "" {
+			return agent
+		}
+	}
+	return toolName
+}
+
+func emitAssistantMessage(streamer *s.JSONStreamer, turnID, content string, toolCallCount int) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	if strings.TrimSpace(content) == "" {
+		return
+	}
+	streamer.Emit("assistant.message", map[string]any{
+		"turn_id":          turnID,
+		"preview":          truncateString(content, 500),
+		"tool_call_count":  toolCallCount,
+		"content_length":   len(content),
+		"has_tool_request": toolCallCount > 0,
+	})
+}
+
+func truncateString(s string, limit int) string {
+	if limit <= 0 || len(s) <= limit {
+		return s
+	}
+	if limit <= 3 {
+		return s[:limit]
+	}
+	return s[:limit-3] + "..."
 }
