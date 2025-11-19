@@ -7,9 +7,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	b "dev_agent/internal/brain"
 	"dev_agent/internal/logx"
+	s "dev_agent/internal/stream"
 
 	t "dev_agent/internal/tools"
 )
@@ -274,22 +276,33 @@ func ParseFinalReport(msg b.ChatMessage) (map[string]any, bool) {
 	return nil, false
 }
 
-func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, publishOpts PublishOptions) (map[string]any, error) {
+func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, publishOpts PublishOptions, streamer *s.JSONStreamer) (map[string]any, error) {
 	tools := t.GetToolDefinitions()
 	var (
 		finalReport map[string]any
 		finished    bool
 		reviewCount int
 	)
+	itemCounter := 0
 
 	for i := 1; ; i++ {
 		logx.Infof("LLM iteration %d", i)
+		turnID := fmt.Sprintf("turn_%d", i)
+		emitTurnStarted(streamer, turnID, i, len(messages), len(tools))
 		resp, err := brain.Complete(messages, tools)
 		if err != nil {
+			emitErrorEvent(streamer, "llm", err.Error(), map[string]any{"iteration": i, "turn_id": turnID})
 			return nil, err
 		}
 		choice := resp.Choices[0].Message
 		messages = append(messages, assistantMessageToDict(choice))
+		hasFinal := false
+		if len(choice.ToolCalls) == 0 {
+			if _, ok := ParseFinalReport(choice); ok {
+				hasFinal = true
+			}
+		}
+		emitTurnCompleted(streamer, turnID, i, len(choice.ToolCalls), hasFinal)
 
 		if len(choice.ToolCalls) > 0 {
 			reviewCompleted := false
@@ -301,7 +314,11 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 				htc := t.ToolCall{ID: tc.ID, Type: tc.Type}
 				htc.Function.Name = tc.Function.Name
 				htc.Function.Arguments = tc.Function.Arguments
+				itemID := nextItemID(&itemCounter)
+				emitItemStarted(streamer, itemID, "tool_call", tc.Function.Name, sanitizeArguments(tc.Function.Name, args))
+				start := time.Now()
 				result := handler.Handle(htc)
+				emitItemCompleted(streamer, itemID, "tool_call", tc.Function.Name, result, time.Since(start))
 				toolMsg := b.ChatMessage{Role: "tool", ToolCallID: tc.ID, Content: toJSON(result)}
 				messages = append(messages, toolMsg)
 
@@ -334,7 +351,11 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 
 	if finished {
 		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
-		_, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		publishItemID := nextItemID(&itemCounter)
+		publishStart := time.Now()
+		emitPublishStarted(streamer, publishItemID, publishOpts)
+		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 		if err != nil {
 			return nil, err
 		}
@@ -347,7 +368,11 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		"task":        publishOpts.Task,
 		"summary":     iterationLimitSummary,
 	}
+	publishItemID := nextItemID(&itemCounter)
+	publishStart := time.Now()
+	emitPublishStarted(streamer, publishItemID, publishOpts)
 	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
+	emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +382,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	return finalReport, nil
 }
 
-func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, maxIters int, publishOpts PublishOptions) (map[string]any, error) {
+func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, maxIters int, publishOpts PublishOptions, streamer *s.JSONStreamer) (map[string]any, error) {
 	if maxIters <= 0 {
 		maxIters = maxIterations
 	}
@@ -367,11 +392,15 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 		finished    bool
 		reviewCount int
 	)
+	itemCounter := 0
 
 	for i := 1; ; i++ {
 		fmt.Printf("[iter %d] requesting completion...\n", i)
+		turnID := fmt.Sprintf("turn_%d", i)
+		emitTurnStarted(streamer, turnID, i, len(messages), len(tools))
 		resp, err := brain.Complete(messages, tools)
 		if err != nil {
+			emitErrorEvent(streamer, "llm", err.Error(), map[string]any{"iteration": i, "turn_id": turnID})
 			return nil, err
 		}
 		choice := resp.Choices[0].Message
@@ -379,6 +408,13 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 			fmt.Printf("assistant> %s\n", choice.Content)
 		}
 		messages = append(messages, assistantMessageToDict(choice))
+		hasFinal := false
+		if len(choice.ToolCalls) == 0 {
+			if _, ok := ParseFinalReport(choice); ok {
+				hasFinal = true
+			}
+		}
+		emitTurnCompleted(streamer, turnID, i, len(choice.ToolCalls), hasFinal)
 
 		if len(choice.ToolCalls) > 0 {
 			reviewCompleted := false
@@ -391,7 +427,11 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 				htc := t.ToolCall{ID: tc.ID, Type: tc.Type}
 				htc.Function.Name = tc.Function.Name
 				htc.Function.Arguments = tc.Function.Arguments
+				itemID := nextItemID(&itemCounter)
+				emitItemStarted(streamer, itemID, "tool_call", tc.Function.Name, sanitizeArguments(tc.Function.Name, args))
+				start := time.Now()
 				result := handler.Handle(htc)
+				emitItemCompleted(streamer, itemID, "tool_call", tc.Function.Name, result, time.Since(start))
 				js := toJSON(result)
 				if len(js) > 2000 {
 					js = js[:2000]
@@ -428,7 +468,11 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 
 	if finished {
 		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
-		_, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		publishItemID := nextItemID(&itemCounter)
+		publishStart := time.Now()
+		emitPublishStarted(streamer, publishItemID, publishOpts)
+		branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 		if err != nil {
 			return nil, err
 		}
@@ -441,7 +485,11 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 		"task":        publishOpts.Task,
 		"summary":     iterationLimitSummary,
 	}
+	publishItemID := nextItemID(&itemCounter)
+	publishStart := time.Now()
+	emitPublishStarted(streamer, publishItemID, publishOpts)
 	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
+	emitPublishCompleted(streamer, publishItemID, branchID, finalReport, err, time.Since(publishStart))
 	if err != nil {
 		return nil, err
 	}
@@ -553,4 +601,201 @@ func extractBranchOutput(data map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func nextItemID(counter *int) string {
+	if counter == nil {
+		return ""
+	}
+	*counter++
+	return fmt.Sprintf("item_%d", *counter)
+}
+
+func emitTurnStarted(streamer *s.JSONStreamer, turnID string, iteration, messageCount, toolCount int) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	streamer.Emit("turn.started", map[string]any{
+		"turn_id":       turnID,
+		"iteration":     iteration,
+		"message_count": messageCount,
+		"tool_count":    toolCount,
+	})
+}
+
+func emitTurnCompleted(streamer *s.JSONStreamer, turnID string, iteration, toolCallCount int, hasFinal bool) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	streamer.Emit("turn.completed", map[string]any{
+		"turn_id":          turnID,
+		"iteration":        iteration,
+		"tool_call_count":  toolCallCount,
+		"has_final_report": hasFinal,
+	})
+}
+
+func emitItemStarted(streamer *s.JSONStreamer, itemID, kind, name string, args map[string]any) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	payload := map[string]any{
+		"item_id": itemID,
+		"kind":    kind,
+		"name":    name,
+	}
+	if len(args) > 0 {
+		payload["args"] = args
+	}
+	streamer.Emit("item.started", payload)
+}
+
+func emitItemCompleted(streamer *s.JSONStreamer, itemID, kind, name string, result map[string]any, duration time.Duration) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	status := "unknown"
+	if result != nil {
+		if s, ok := result["status"].(string); ok && s != "" {
+			status = s
+		}
+	}
+	payload := map[string]any{
+		"item_id":     itemID,
+		"kind":        kind,
+		"name":        name,
+		"status":      status,
+		"duration_ms": duration.Milliseconds(),
+	}
+	if status != "success" {
+		if result != nil {
+			if errMsg, ok := result["error"].(string); ok && strings.TrimSpace(errMsg) != "" {
+				payload["error"] = strings.TrimSpace(errMsg)
+			}
+		}
+	} else if result != nil {
+		if data, ok := result["data"].(map[string]any); ok {
+			if branch := t.ExtractBranchID(data); branch != "" {
+				payload["branch_id"] = branch
+			}
+			if summary := extractBranchOutput(data); summary != "" {
+				payload["summary"] = summary
+			}
+		}
+	}
+	streamer.Emit("item.completed", payload)
+}
+
+func emitPublishStarted(streamer *s.JSONStreamer, itemID string, opts PublishOptions) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	args := map[string]any{}
+	if opts.ParentBranchID != "" {
+		args["parent_branch_id"] = opts.ParentBranchID
+	}
+	if opts.ProjectName != "" {
+		args["project_name"] = opts.ProjectName
+	}
+	if opts.WorkspaceDir != "" {
+		args["workspace_dir"] = opts.WorkspaceDir
+	}
+	emitItemStarted(streamer, itemID, "publish", "finalize_branch_push", args)
+	streamer.Emit("publish.started", args)
+}
+
+func emitPublishCompleted(streamer *s.JSONStreamer, itemID, branchID string, report map[string]any, err error, duration time.Duration) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	status := "success"
+	if err != nil {
+		status = "error"
+	}
+	publishReport := ""
+	if report != nil {
+		if s, ok := report["publish_report"].(string); ok && strings.TrimSpace(s) != "" {
+			publishReport = strings.TrimSpace(s)
+		}
+	}
+	itemPayload := map[string]any{
+		"item_id":     itemID,
+		"kind":        "publish",
+		"name":        "finalize_branch_push",
+		"status":      status,
+		"duration_ms": duration.Milliseconds(),
+	}
+	if branchID != "" {
+		itemPayload["branch_id"] = branchID
+	}
+	if publishReport != "" {
+		itemPayload["summary"] = publishReport
+	}
+	if err != nil {
+		itemPayload["error"] = err.Error()
+	}
+	streamer.Emit("item.completed", itemPayload)
+
+	pubPayload := map[string]any{
+		"status": status,
+	}
+	if branchID != "" {
+		pubPayload["branch_id"] = branchID
+	}
+	if publishReport != "" {
+		pubPayload["publish_report"] = publishReport
+	}
+	if err != nil {
+		pubPayload["error"] = err.Error()
+	}
+	streamer.Emit("publish.completed", pubPayload)
+}
+
+func emitErrorEvent(streamer *s.JSONStreamer, scope, message string, extra map[string]any) {
+	if streamer == nil || !streamer.Enabled() {
+		return
+	}
+	payload := map[string]any{
+		"scope":   scope,
+		"message": message,
+	}
+	for k, v := range extra {
+		if k == "" || v == nil {
+			continue
+		}
+		payload[k] = v
+	}
+	streamer.Emit("error", payload)
+}
+
+func sanitizeArguments(toolName string, args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return nil
+	}
+	safe := map[string]any{}
+	switch toolName {
+	case "execute_agent":
+		copyIfPresent(safe, args, "agent")
+		copyIfPresent(safe, args, "parent_branch_id")
+		copyIfPresent(safe, args, "project_name")
+		copyIfPresent(safe, args, "branch_id")
+	default:
+		for k, v := range args {
+			low := strings.ToLower(k)
+			if low == "prompt" || strings.Contains(low, "token") {
+				continue
+			}
+			safe[k] = v
+		}
+	}
+	if len(safe) == 0 {
+		return nil
+	}
+	return safe
+}
+
+func copyIfPresent(dst, src map[string]any, key string) {
+	if val, ok := src[key]; ok {
+		dst[key] = val
+	}
 }

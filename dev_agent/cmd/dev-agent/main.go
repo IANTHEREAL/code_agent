@@ -10,7 +10,9 @@ import (
 
 	b "dev_agent/internal/brain"
 	cfg "dev_agent/internal/config"
+	"dev_agent/internal/logx"
 	o "dev_agent/internal/orchestrator"
+	s "dev_agent/internal/stream"
 	t "dev_agent/internal/tools"
 )
 
@@ -19,6 +21,7 @@ func main() {
 	parent := flag.String("parent-branch-id", "", "Parent branch UUID (required)")
 	project := flag.String("project-name", "", "Optional project name override")
 	headless := flag.Bool("headless", false, "Run in headless mode (no chat prints)")
+	streamJSON := flag.Bool("stream-json", false, "Stream NDJSON progress events to stdout")
 	flag.Parse()
 
 	conf, err := cfg.FromEnv()
@@ -54,6 +57,14 @@ func main() {
 	brain := b.NewLLMBrain(conf.AzureAPIKey, conf.AzureEndpoint, conf.AzureDeployment, conf.AzureAPIVersion, 3)
 	mcp := t.NewMCPClient(conf.MCPBaseURL)
 	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent)
+	streamer := s.NewJSONStreamer(*streamJSON)
+	if streamer.Enabled() {
+		logx.SetLevel(logx.Error)
+		if !*headless {
+			fmt.Fprintln(os.Stderr, "note: --stream-json requires headless mode; forcing --headless")
+			*headless = true
+		}
+	}
 
 	msgs := o.BuildInitialMessages(tsk, conf.ProjectName, conf.WorkspaceDir, *parent)
 	publish := o.PublishOptions{
@@ -65,14 +76,33 @@ func main() {
 		GitUserName:    conf.GitUserName,
 		GitUserEmail:   conf.GitUserEmail,
 	}
+	if streamer.Enabled() {
+		streamer.Emit("thread.started", map[string]any{
+			"task":             tsk,
+			"project_name":     conf.ProjectName,
+			"parent_branch_id": *parent,
+			"headless":         *headless,
+			"workspace_dir":    conf.WorkspaceDir,
+		})
+	}
 
 	var report map[string]any
 	if *headless {
-		report, err = o.Orchestrate(brain, handler, msgs, publish)
+		report, err = o.Orchestrate(brain, handler, msgs, publish, streamer)
 	} else {
-		report, err = o.ChatLoop(brain, handler, msgs, 0, publish)
+		report, err = o.ChatLoop(brain, handler, msgs, 0, publish, streamer)
 	}
 	if err != nil {
+		if streamer.Enabled() {
+			streamer.Emit("error", map[string]any{
+				"scope":   "orchestrator",
+				"message": err.Error(),
+			})
+			streamer.Emit("thread.completed", map[string]any{
+				"status":  "error",
+				"summary": err.Error(),
+			})
+		}
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
@@ -94,7 +124,24 @@ func main() {
 	if instr := o.BuildInstructions(report); instr != "" {
 		report["instructions"] = instr
 	}
+	if streamer.Enabled() {
+		streamer.Emit("thread.completed", map[string]any{
+			"status":       reportString(report, "status"),
+			"summary":      reportString(report, "summary"),
+			"final_report": report,
+		})
+	}
 
 	out, _ := json.MarshalIndent(report, "", "  ")
 	fmt.Println(string(out))
+}
+
+func reportString(report map[string]any, key string) string {
+	if report == nil {
+		return ""
+	}
+	if v, ok := report[key]; ok && v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
 }
