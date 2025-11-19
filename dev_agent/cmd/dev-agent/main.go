@@ -10,7 +10,9 @@ import (
 
 	b "dev_agent/internal/brain"
 	cfg "dev_agent/internal/config"
+	"dev_agent/internal/logx"
 	o "dev_agent/internal/orchestrator"
+	"dev_agent/internal/streaming"
 	t "dev_agent/internal/tools"
 )
 
@@ -19,7 +21,14 @@ func main() {
 	parent := flag.String("parent-branch-id", "", "Parent branch UUID (required)")
 	project := flag.String("project-name", "", "Optional project name override")
 	headless := flag.Bool("headless", false, "Run in headless mode (no chat prints)")
+	streamJSON := flag.Bool("stream-json", false, "Emit orchestration events as NDJSON to stdout (forces headless mode)")
 	flag.Parse()
+
+	streamEnabled := streamJSON != nil && *streamJSON
+	if streamEnabled {
+		*headless = true
+		logx.SetLevel(logx.Error)
+	}
 
 	conf, err := cfg.FromEnv()
 	if err != nil {
@@ -41,7 +50,11 @@ func main() {
 
 	tsk := *task
 	if tsk == "" {
-		fmt.Printf("you> Enter task description: ")
+		promptWriter := os.Stdout
+		if streamEnabled {
+			promptWriter = os.Stderr
+		}
+		fmt.Fprintf(promptWriter, "you> Enter task description: ")
 		reader := bufio.NewReader(os.Stdin)
 		line, _ := reader.ReadString('\n')
 		tsk = strings.TrimSpace(line)
@@ -66,13 +79,28 @@ func main() {
 		GitUserEmail:   conf.GitUserEmail,
 	}
 
+	var streamer *streaming.JSONStreamer
+	if streamEnabled {
+		streamer = streaming.NewJSONStreamer(true, os.Stdout)
+		streamer.EmitThreadStarted(tsk, conf.ProjectName, *parent, *headless)
+	}
+
+	opts := o.RunOptions{
+		Publish:  publish,
+		Streamer: streamer,
+	}
+
 	var report map[string]any
 	if *headless {
-		report, err = o.Orchestrate(brain, handler, msgs, publish)
+		report, err = o.Orchestrate(brain, handler, msgs, opts)
 	} else {
-		report, err = o.ChatLoop(brain, handler, msgs, 0, publish)
+		report, err = o.ChatLoop(brain, handler, msgs, 0, opts)
 	}
 	if err != nil {
+		if streamer != nil && streamer.Enabled() {
+			streamer.EmitError("cli", err.Error(), nil)
+			streamer.EmitThreadCompleted("error", err.Error(), nil)
+		}
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
 	}
@@ -93,6 +121,12 @@ func main() {
 	}
 	if instr := o.BuildInstructions(report); instr != "" {
 		report["instructions"] = instr
+	}
+
+	if streamer != nil && streamer.Enabled() {
+		status, _ := report["status"].(string)
+		summary, _ := report["summary"].(string)
+		streamer.EmitThreadCompleted(status, summary, report)
 	}
 
 	out, _ := json.MarshalIndent(report, "", "  ")
