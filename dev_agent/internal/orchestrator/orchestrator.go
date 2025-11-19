@@ -7,9 +7,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	b "dev_agent/internal/brain"
 	"dev_agent/internal/logx"
+	"dev_agent/internal/streaming"
 
 	t "dev_agent/internal/tools"
 )
@@ -137,7 +139,12 @@ type PublishOptions struct {
 	GitUserEmail   string
 }
 
-func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool) (string, error) {
+type RunOptions struct {
+	Publish  PublishOptions
+	Streamer *streaming.JSONStreamer
+}
+
+func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool, emitter *eventEmitter) (string, error) {
 	if opts.GitHubToken == "" {
 		return "", errors.New("missing GitHub token for publish step")
 	}
@@ -211,16 +218,49 @@ Include a short publish report that states the repository URL, branch name, and 
 	execCall.Function.Name = "execute_agent"
 	execCall.Function.Arguments = string(argsBytes)
 
-	execResp := handler.Handle(execCall)
-	if status, _ := execResp["status"].(string); status != "success" {
-		return "", fmt.Errorf("publish execute_agent failed: %v", execResp)
+	var (
+		itemID   string
+		start    time.Time
+		duration time.Duration
+	)
+	if emitter != nil {
+		args := map[string]any{
+			"agent":            "codex",
+			"parent_branch_id": parent,
+		}
+		if opts.ProjectName != "" {
+			args["project_name"] = opts.ProjectName
+		}
+		itemID = emitter.ItemStarted("publish", "publish", args)
+		start = time.Now()
 	}
+
+	execResp := handler.Handle(execCall)
+	if !start.IsZero() {
+		duration = time.Since(start)
+	}
+
 	data, _ := execResp["data"].(map[string]any)
 	branchID := t.ExtractBranchID(data)
 	if branchID == "" {
-		return "", errors.New("publish execute_agent missing branch id")
+		branchID = t.ExtractBranchID(execResp)
 	}
 	publishSummary := extractBranchOutput(data)
+	if publishSummary == "" {
+		publishSummary = summarizeToolResult(execResp)
+	}
+
+	status := resultStatus(execResp)
+	if emitter != nil {
+		emitter.ItemCompleted(itemID, status, duration, branchID, publishSummary)
+	}
+
+	if status != "success" {
+		return "", fmt.Errorf("publish execute_agent failed: %v", execResp)
+	}
+	if branchID == "" {
+		return "", errors.New("publish execute_agent missing branch id")
+	}
 	if publishSummary == "" {
 		logx.Warningf("Publish response missing required report (repo/branch/commit/tests); continuing without it (branch_id=%s)", branchID)
 		publishSummary = fmt.Sprintf("Publish report unavailable; inspect Pantheon branch %s for push details.", branchID)
@@ -274,36 +314,67 @@ func ParseFinalReport(msg b.ChatMessage) (map[string]any, bool) {
 	return nil, false
 }
 
-func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, publishOpts PublishOptions) (map[string]any, error) {
+func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, opts RunOptions) (map[string]any, error) {
 	tools := t.GetToolDefinitions()
+	emitter := newEventEmitter(opts.Streamer)
 	var (
-		finalReport map[string]any
-		finished    bool
-		reviewCount int
+		finalReport    map[string]any
+		finished       bool
+		reviewCount    int
+		totalToolCalls int
 	)
 
 	for i := 1; ; i++ {
 		logx.Infof("LLM iteration %d", i)
+		turnID := fmt.Sprintf("turn_%d", i)
+		if emitter != nil {
+			emitter.TurnStarted(turnID, i, len(messages), totalToolCalls)
+		}
 		resp, err := brain.Complete(messages, tools)
 		if err != nil {
+			if emitter != nil {
+				emitter.EmitError("llm.complete", err.Error(), map[string]any{"iteration": i, "turn_id": turnID})
+			}
 			return nil, err
 		}
 		choice := resp.Choices[0].Message
 		messages = append(messages, assistantMessageToDict(choice))
+		if emitter != nil {
+			emitter.AssistantMessage(turnID, choice.Content, len(choice.ToolCalls))
+		}
 
 		if len(choice.ToolCalls) > 0 {
+			turnToolCount := 0
 			reviewCompleted := false
 			for _, tc := range choice.ToolCalls {
-				var args map[string]any
-				if tc.Function.Arguments != "" {
-					_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
+				turnToolCount++
+				totalToolCalls++
+				args := parseToolArgs(tc.Function.Arguments)
+				var itemArgs map[string]any
+				if emitter != nil {
+					itemArgs = sanitizeToolArgs(tc.Function.Name, args)
+				}
+				itemID := ""
+				if emitter != nil {
+					itemID = emitter.ItemStarted("tool_call", tc.Function.Name, itemArgs)
 				}
 				htc := t.ToolCall{ID: tc.ID, Type: tc.Type}
 				htc.Function.Name = tc.Function.Name
 				htc.Function.Arguments = tc.Function.Arguments
+				var start time.Time
+				if emitter != nil {
+					start = time.Now()
+				}
 				result := handler.Handle(htc)
+				var duration time.Duration
+				if emitter != nil {
+					duration = time.Since(start)
+				}
 				toolMsg := b.ChatMessage{Role: "tool", ToolCallID: tc.ID, Content: toJSON(result)}
 				messages = append(messages, toolMsg)
+				if emitter != nil {
+					emitter.ItemCompleted(itemID, resultStatus(result), duration, eventBranchID(result), summarizeToolResult(result))
+				}
 
 				if tc.Function.Name == "execute_agent" {
 					if agent, _ := args["agent"].(string); agent == "review_code" {
@@ -312,6 +383,9 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 						}
 					}
 				}
+			}
+			if emitter != nil {
+				emitter.TurnCompleted(turnID, i, turnToolCount, false)
 			}
 			if reviewCompleted {
 				reviewCount++
@@ -324,18 +398,29 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 			continue
 		}
 
+		hasFinal := false
 		if fr, ok := ParseFinalReport(choice); ok {
 			finalReport = fr
 			finished = true
+			hasFinal = true
+		} else {
+			logx.Infof("Assistant response was not a final report; continuing.")
+		}
+		if emitter != nil {
+			emitter.TurnCompleted(turnID, i, 0, hasFinal)
+		}
+		if finished {
 			break
 		}
-		logx.Infof("Assistant response was not a final report; continuing.")
 	}
 
 	if finished {
-		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
-		_, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
+		_, err := finalizeBranchPush(handler, opts.Publish, finalReport, true, emitter)
 		if err != nil {
+			if emitter != nil {
+				emitter.EmitError("publish", err.Error(), nil)
+			}
 			return nil, err
 		}
 		return finalReport, nil
@@ -344,11 +429,14 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	finalReport = map[string]any{
 		"is_finished": false,
 		"status":      statusIterationLimit,
-		"task":        publishOpts.Task,
+		"task":        opts.Publish.Task,
 		"summary":     iterationLimitSummary,
 	}
-	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
+	branchID, err := finalizeBranchPush(handler, opts.Publish, finalReport, false, emitter)
 	if err != nil {
+		if emitter != nil {
+			emitter.EmitError("publish", err.Error(), nil)
+		}
 		return nil, err
 	}
 	if branchID != "" {
@@ -357,7 +445,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	return finalReport, nil
 }
 
-func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, maxIters int, publishOpts PublishOptions) (map[string]any, error) {
+func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessage, maxIters int, opts RunOptions) (map[string]any, error) {
 	if maxIters <= 0 {
 		maxIters = maxIterations
 	}
@@ -427,8 +515,8 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	}
 
 	if finished {
-		ensureReportDefaults(finalReport, publishOpts.Task, statusCompleted, true)
-		_, err := finalizeBranchPush(handler, publishOpts, finalReport, true)
+		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
+		_, err := finalizeBranchPush(handler, opts.Publish, finalReport, true, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -438,10 +526,10 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	finalReport = map[string]any{
 		"is_finished": false,
 		"status":      statusIterationLimit,
-		"task":        publishOpts.Task,
+		"task":        opts.Publish.Task,
 		"summary":     iterationLimitSummary,
 	}
-	branchID, err := finalizeBranchPush(handler, publishOpts, finalReport, false)
+	branchID, err := finalizeBranchPush(handler, opts.Publish, finalReport, false, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -551,6 +639,166 @@ func extractBranchOutput(data map[string]any) string {
 		if summary, _ := manifest["summary"].(string); strings.TrimSpace(summary) != "" {
 			return strings.TrimSpace(summary)
 		}
+	}
+	return ""
+}
+
+type eventEmitter struct {
+	streamer *streaming.JSONStreamer
+	nextItem int
+}
+
+func newEventEmitter(streamer *streaming.JSONStreamer) *eventEmitter {
+	if streamer == nil || !streamer.Enabled() {
+		return nil
+	}
+	return &eventEmitter{streamer: streamer}
+}
+
+func (e *eventEmitter) TurnStarted(turnID string, iteration, messageCount, toolCount int) {
+	if e == nil {
+		return
+	}
+	e.streamer.EmitTurnStarted(turnID, iteration, messageCount, toolCount)
+}
+
+func (e *eventEmitter) AssistantMessage(turnID, preview string, toolCalls int) {
+	if e == nil {
+		return
+	}
+	e.streamer.EmitAssistantMessage(turnID, preview, toolCalls)
+}
+
+func (e *eventEmitter) TurnCompleted(turnID string, iteration, toolCalls int, hasFinal bool) {
+	if e == nil {
+		return
+	}
+	e.streamer.EmitTurnCompleted(turnID, iteration, toolCalls, hasFinal)
+}
+
+func (e *eventEmitter) ItemStarted(kind, name string, args map[string]any) string {
+	if e == nil {
+		return ""
+	}
+	e.nextItem++
+	itemID := fmt.Sprintf("item_%d", e.nextItem)
+	e.streamer.EmitItemStarted(itemID, kind, name, args)
+	return itemID
+}
+
+func (e *eventEmitter) ItemCompleted(itemID, status string, duration time.Duration, branchID, summary string) {
+	if e == nil || itemID == "" {
+		return
+	}
+	e.streamer.EmitItemCompleted(itemID, status, duration, branchID, summary)
+}
+
+func (e *eventEmitter) EmitError(scope, message string, extra map[string]any) {
+	if e == nil {
+		return
+	}
+	e.streamer.EmitError(scope, message, extra)
+}
+
+func parseToolArgs(raw string) map[string]any {
+	if strings.TrimSpace(raw) == "" {
+		return map[string]any{}
+	}
+	var args map[string]any
+	if err := json.Unmarshal([]byte(raw), &args); err != nil {
+		return map[string]any{}
+	}
+	return args
+}
+
+func sanitizeToolArgs(name string, args map[string]any) map[string]any {
+	if len(args) == 0 {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	switch name {
+	case "execute_agent":
+		copyStringField(out, args, "agent")
+		copyStringField(out, args, "project_name")
+		copyStringField(out, args, "parent_branch_id")
+		if prompt, _ := args["prompt"].(string); prompt != "" {
+			preview := streaming.PromptPreview(prompt)
+			out["prompt_preview"] = preview
+			if strings.TrimSpace(prompt) != preview {
+				out["prompt_truncated"] = true
+			}
+		}
+	case "read_artifact":
+		copyStringField(out, args, "branch_id")
+		copyStringField(out, args, "path")
+	case "check_status":
+		copyStringField(out, args, "branch_id")
+		copyFloatField(out, args, "timeout_seconds")
+		copyFloatField(out, args, "poll_interval_seconds")
+	default:
+		for k, v := range args {
+			switch val := v.(type) {
+			case string:
+				out[k] = streaming.PromptPreview(val)
+			case float64, bool:
+				out[k] = val
+			}
+		}
+	}
+	return out
+}
+
+func copyStringField(dst, src map[string]any, key string) {
+	if val, ok := src[key].(string); ok && strings.TrimSpace(val) != "" {
+		dst[key] = strings.TrimSpace(val)
+	}
+}
+
+func copyFloatField(dst, src map[string]any, key string) {
+	if val, ok := src[key].(float64); ok {
+		dst[key] = val
+	}
+}
+
+func resultStatus(resp map[string]any) string {
+	if resp == nil {
+		return "error"
+	}
+	if status, ok := resp["status"].(string); ok && strings.TrimSpace(status) != "" {
+		return strings.ToLower(strings.TrimSpace(status))
+	}
+	return "error"
+}
+
+func eventBranchID(resp map[string]any) string {
+	if resp == nil {
+		return ""
+	}
+	if data, _ := resp["data"].(map[string]any); data != nil {
+		if id := t.ExtractBranchID(data); id != "" {
+			return id
+		}
+	}
+	return t.ExtractBranchID(resp)
+}
+
+func summarizeToolResult(resp map[string]any) string {
+	if resp == nil {
+		return ""
+	}
+	if errMsg, _ := resp["error"].(string); strings.TrimSpace(errMsg) != "" {
+		return streaming.PromptPreview(errMsg)
+	}
+	if data, _ := resp["data"].(map[string]any); data != nil {
+		if out, _ := data["response"].(string); strings.TrimSpace(out) != "" {
+			return streaming.PromptPreview(out)
+		}
+		if status, _ := data["status"].(string); strings.TrimSpace(status) != "" {
+			return fmt.Sprintf("status=%s", strings.TrimSpace(status))
+		}
+	}
+	if status, _ := resp["status"].(string); strings.TrimSpace(status) != "" {
+		return fmt.Sprintf("status=%s", strings.TrimSpace(status))
 	}
 	return ""
 }
