@@ -14,7 +14,7 @@ import (
 
 const (
 	assistantPreviewLimit = 500
-	promptPreviewLimit    = 240
+	promptPreviewLimit    = 1024
 )
 
 // JSONStreamer emits NDJSON events that mirror the Codex CLI format.
