@@ -74,6 +74,13 @@ func (c *MCPClient) rpcPost(url string, body map[string]any, timeout time.Durati
 }
 
 func (c *MCPClient) call(method string, params map[string]any, timeout time.Duration) (map[string]any, error) {
+	return c.callWithRetries(method, params, timeout, c.maxRetries)
+}
+
+func (c *MCPClient) callWithRetries(method string, params map[string]any, timeout time.Duration, maxRetries int) (map[string]any, error) {
+	if maxRetries < 1 {
+		maxRetries = 1
+	}
 	c.requestID++
 	payload := map[string]any{
 		"jsonrpc": "2.0",
@@ -83,7 +90,7 @@ func (c *MCPClient) call(method string, params map[string]any, timeout time.Dura
 	}
 	var lastErr error
 
-	for attempt := 0; attempt < c.maxRetries; attempt++ {
+	for attempt := 0; attempt < maxRetries; attempt++ {
 		logx.Debugf("MCP POST %s attempt %d to %s", method, attempt+1, c.rpcURL)
 		resp, cancel, err := c.rpcPost(c.rpcURL, payload, timeout)
 		if err != nil {
@@ -133,9 +140,9 @@ func (c *MCPClient) call(method string, params map[string]any, timeout time.Dura
 				}
 			}
 		}
-		if attempt < c.maxRetries-1 {
+		if attempt < maxRetries-1 {
 			wait := time.Duration(1<<attempt) * time.Second
-			logx.Warningf("MCP call %s failed (attempt %d/%d): %v. Retrying in %ds...", method, attempt+1, c.maxRetries, lastErr, int(wait.Seconds()))
+			logx.Warningf("MCP call %s failed (attempt %d/%d): %v. Retrying in %ds...", method, attempt+1, maxRetries, lastErr, int(wait.Seconds()))
 			time.Sleep(wait)
 		}
 	}
@@ -174,10 +181,14 @@ func (c *MCPClient) ParallelExplore(projectName, parentBranchID string, prompts 
 }
 
 func (c *MCPClient) GetBranch(branchID string) (map[string]any, error) {
-	return c.call("tools/call", map[string]any{
+	retries := c.maxRetries
+	if retries < 5 {
+		retries = 5
+	}
+	return c.callWithRetries("tools/call", map[string]any{
 		"name":      "get_branch",
 		"arguments": map[string]any{"branch_id": branchID},
-	}, 300*time.Second)
+	}, 300*time.Second, retries)
 }
 
 func (c *MCPClient) BranchReadFile(branchID, filePath string) (map[string]any, error) {

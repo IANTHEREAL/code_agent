@@ -130,5 +130,5 @@ func main() {
 	}
 
 	out, _ := json.MarshalIndent(report, "", "  ")
-	fmt.Println(string(out))
+	fmt.Fprintln(os.Stderr, string(out))
 }
