@@ -195,6 +195,7 @@ Choose an appropriate git branch name for this task, commit the related file cha
 Publishing rules:
 - Configure git identity (%[6]s).
 - Use the original user task and the latest entries in '%[5]s/worklog.md' to determine the target repository; confirm the repository root with 'git rev-parse --show-toplevel' and verify the remote via 'git remote -v'. Do not operate on an unrelated repo.
+- If you cannot confirm a valid git repository (rev-parse/root or remotes are missing), stop immediately, summarize the delivered work (reference '%[5]s/worklog.md' and tests), and exit instead of attempting any git commands.
 - Stage and commit only the files required for this task; exclude logs, review artifacts, and temporary scratch files.
 - Keep branch names kebab-case and describe the task scope.
 - Keep the commit subject <= 72 characters and meaningful.
