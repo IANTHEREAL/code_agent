@@ -29,9 +29,10 @@ const systemPromptTemplate = `You are a expert software engineer, and a TDD (Tes
 4.  Repeat **Review** and **Fix** until 'review_code' agent reports no P0/P1 issues.
 
 ### Your Orchestration Rules
-1.  **Call Agents**: For each workflow step, call 'execute_agent'.
-2.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
-3.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from '%[1]s/code_review.log, the path must be an absolute path.
+1.  **Single Call Per Turn**: Issue exactly one agent/tool call per assistant response; do not batch tool calls because each subsequent agent needs the prior branch's id to extend the branch lineage correctly.
+2.  **Call Agents**: For each workflow step, the agent is invoked through the 'execute_agent'.
+3.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
+4.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from '%[1]s/code_review.log, the path must be an absolute path.
 
 ### Agent Prompt Templates
 
@@ -287,7 +288,7 @@ func BuildInitialMessages(task, projectName, workspaceDir, parentBranchID string
 		"parent_branch_id": parentBranchID,
 		"project_name":     projectName,
 		"workspace_dir":    workspaceDir,
-		"notes":            "For every phase: craft an execute_agent prompt covering task, phase goal, context. Track branch lineage and stop when review_code reports no P0/P1 issues.",
+		"notes":            "For every phase: craft a single execute_agent prompt covering task, phase goal, context. Do not batch tool calls. Track branch lineage and stop when review_code reports no P0/P1 issues.",
 	}
 	content, _ := json.MarshalIndent(userPayload, "", "  ")
 	return []b.ChatMessage{
