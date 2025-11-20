@@ -323,9 +323,11 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		finished       bool
 		reviewCount    int
 		totalToolCalls int
+		lastTurn       int
 	)
 
 	for i := 1; ; i++ {
+		lastTurn = i
 		logx.Infof("LLM iteration %d", i)
 		turnID := fmt.Sprintf("turn_%d", i)
 		if emitter != nil {
@@ -415,9 +417,25 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		}
 	}
 
+	runPublish := func(report map[string]any, success bool) (string, error) {
+		turnNum := lastTurn + 1
+		var turnID string
+		if emitter != nil {
+			turnID = fmt.Sprintf("turn_%d", turnNum)
+			emitter.TurnStarted(turnID, turnNum, len(messages), totalToolCalls)
+		}
+		branchID, err := finalizeBranchPush(handler, opts.Publish, report, success, emitter)
+		totalToolCalls++
+		lastTurn = turnNum
+		if emitter != nil {
+			emitter.TurnCompleted(turnID, turnNum, 1, false)
+		}
+		return branchID, err
+	}
+
 	if finished {
 		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
-		_, err := finalizeBranchPush(handler, opts.Publish, finalReport, true, emitter)
+		_, err := runPublish(finalReport, true)
 		if err != nil {
 			if emitter != nil {
 				emitter.EmitError("publish", err.Error(), nil)
@@ -433,7 +451,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		"task":        opts.Publish.Task,
 		"summary":     iterationLimitSummary,
 	}
-	branchID, err := finalizeBranchPush(handler, opts.Publish, finalReport, false, emitter)
+	branchID, err := runPublish(finalReport, false)
 	if err != nil {
 		if emitter != nil {
 			emitter.EmitError("publish", err.Error(), nil)
