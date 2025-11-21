@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -33,6 +32,7 @@ const systemPromptTemplate = `You are a expert software engineer, and a TDD (Tes
 2.  **Call Agents**: For each workflow step, the agent is invoked through the 'execute_agent'.
 3.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
 4.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from '%[1]s/code_review.log, the path must be an absolute path.
+5.  **Local-Only Before Publish**: Implement/Review/Fix phases are strictly local development. You may create/checkout branches and stage/commit locally, but you must **NOT** run 'git push' or create PRs (e.g., via 'gh pr create') in these phases.
 
 ### Agent Prompt Templates
 
@@ -66,9 +66,11 @@ You are an expert engineer. Your goal is to produce high-quality, verified code 
     * **Design**: Outline your solution strategy in '%[1]s/worklog.md'.
 
 3.  **Phase 2: TDD Implementation**
-    * **Test**: Write tests first. For bugs, ensure you have a regression test.
-    * **Code**: Implement the solution according to your design.
-    * **Verify**: Ensure local tests pass.
+	* **Test**: Write tests first. For bugs, ensure you have a regression test.
+	* **Code**: Implement the solution according to your design.
+	* **Verify**: Ensure local tests pass.
+
+	* **Git Discipline**: Work locally only. You may create/checkout branches and stage/commit locally, but do **NOT** push, and do **NOT** create PRs (e.g., via 'gh pr create') during this phase.
 
 3.  **Final Step**: Update '%[1]s/worklog.md' with a summary of changes and test results.
 
@@ -105,6 +107,7 @@ Ultrathink! Fix all P0/P1 issues reported in the review.
 1.  **Address Issues**: Systematically fix every P0 and P1 issue listed.
 2.  **Verify**: Ensure existing tests pass and add new tests if the review indicated missing coverage.
 3.  **Update Log**: Append a "Fix Summary" to '%[1]s/worklog.md' explaining what was changed.
+4.  **Git Discipline**: Work locally only. You may create/checkout branches and stage/commit locally, but do **NOT** push, and do **NOT** create PRs (e.g., via 'gh pr create') during this phase.
 
 Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '~/.setup-git.sh' to configure both before proceeding.
 
@@ -146,15 +149,6 @@ type RunOptions struct {
 }
 
 func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[string]any, success bool, emitter *eventEmitter) (string, error) {
-	if opts.GitHubToken == "" {
-		return "", errors.New("missing GitHub token for publish step")
-	}
-	if strings.TrimSpace(opts.GitUserName) == "" {
-		return "", errors.New("missing git user name for publish step")
-	}
-	if strings.TrimSpace(opts.GitUserEmail) == "" {
-		return "", errors.New("missing git user email for publish step")
-	}
 	lineage := handler.BranchRange()
 	parent := lineage["latest_branch_id"]
 	if parent == "" {
@@ -180,31 +174,27 @@ func finalizeBranchPush(handler publishHandler, opts PublishOptions, report map[
 	}
 
 	meta := fmt.Sprintf("commit-meta: start_branch=%s latest_branch=%s", lineage["start_branch_id"], lineage["latest_branch_id"])
-	tokenLiteral := strconv.Quote(opts.GitHubToken)
-	identityInstruction := fmt.Sprintf("set git user.name to %q and user.email to %q (update both local and global config before committing).", opts.GitUserName, opts.GitUserEmail)
 	prompt := fmt.Sprintf(`Finalize the task by committing and pushing the current workspace state.
 
 Task: %[1]s
 Outcome: %[2]s
-GitHub access token (export for git auth and unset afterwards): %[3]s
-Meta (include in the commit message if helpful): %[4]s
+Meta (include in the commit message if helpful): %[3]s
 
-The worklog is located into '%[5]s/worklog.md'.
+The worklog is located into '%[4]s/worklog.md'.
 
-Choose an appropriate git branch name for this task, commit the related file changes, and reply with a concise publish report that MUST include: repository URL, pushed Git branch name, commit hash, and pointers to the latest implementation summary/tests (e.g., '%[5]s/worklog.md' and any test artifact). Do not print the raw token anywhere except when configuring git. If you cannot provide this report, treat the publish as failed.
+Choose an appropriate git branch name for this task, commit the related file changes, and reply with a concise publish report that MUST include: repository URL, pushed Git branch name, commit hash, and pointers to the latest implementation summary/tests (e.g., '%[4]s/worklog.md' and any test artifact).
 
 Publishing rules:
-- Configure git identity (%[6]s).
-- Use the original user task and the latest entries in '%[5]s/worklog.md' to determine the target repository; confirm the repository root with 'git rev-parse --show-toplevel' and verify the remote via 'git remote -v'. Do not operate on an unrelated repo.
-- If you cannot confirm a valid git repository (rev-parse/root or remotes are missing), stop immediately, summarize the delivered work (reference '%[5]s/worklog.md' and tests), and exit instead of attempting any git commands.
+- Use existing git identity and credentials. If you hit permission/auth issues, run '~/.setup-git.sh' once to configure git and retry. If it still fails, stop and report the failure.
+- Use the original user task and the latest entries in '%[4]s/worklog.md' to determine the target repository; confirm the repository root with 'git rev-parse --show-toplevel' and verify the remote via 'git remote -v'. Do not operate on an unrelated repo.
+- If you cannot confirm a valid git repository (rev-parse/root or remotes are missing), stop immediately, summarize the delivered work (reference '%[4]s/worklog.md' and tests), and exit instead of attempting any git commands.
 - Stage and commit only the files required for this task; exclude logs, review artifacts, and temporary scratch files.
 - Keep branch names kebab-case and describe the task scope.
 - Keep the commit subject <= 72 characters and meaningful.
-- Unset exported credentials after pushing.
-- Git push must be fully non-interactive. Rewrite the existing 'origin' remote to include the GitHub token (example: "CURRENT=$(git remote get-url origin); git remote set-url origin https://<github-username>:${GITHUB_TOKEN}@github.com/<owner>/<repo>.git"), run "git push -u origin <branch>", then restore the original remote URL. Do not print the raw token in logs.
-- Do not stage or commit '%[5]s/worklog.md' or '%[5]s/code_review.log'.
+- Git push must be fully non-interactive. Rely on existing credentials or the setup script; do not reveal secrets in logs.
+- Do not stage or commit '%[4]s/worklog.md' or '%[4]s/code_review.log'.
 
-Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, tokenLiteral, meta, opts.WorkspaceDir, identityInstruction)
+Include a short publish report that states the repository URL, branch name, and a concise PR-style summary.`, opts.Task, outcome, meta, opts.WorkspaceDir, opts.WorkspaceDir)
 
 	logx.Infof("Finalizing workflow by asking codex to push from branch %s lineage.", parent)
 	execArgs := map[string]any{
