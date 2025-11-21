@@ -32,6 +32,7 @@ const systemPromptTemplate = `You are a expert software engineer, and a TDD (Tes
 2.  **Call Agents**: For each workflow step, the agent is invoked through the 'execute_agent'.
 3.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
 4.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from '%[1]s/code_review.log, the path must be an absolute path.
+5.  **Local-Only Before Publish**: Implement/Review/Fix phases are strictly local development. You may create/checkout branches and stage/commit locally, but you must **NOT** run 'git push' or create PRs (e.g., via 'gh pr create') in these phases.
 
 ### Agent Prompt Templates
 
@@ -65,9 +66,11 @@ You are an expert engineer. Your goal is to produce high-quality, verified code 
     * **Design**: Outline your solution strategy in '%[1]s/worklog.md'.
 
 3.  **Phase 2: TDD Implementation**
-    * **Test**: Write tests first. For bugs, ensure you have a regression test.
-    * **Code**: Implement the solution according to your design.
-    * **Verify**: Ensure local tests pass.
+	* **Test**: Write tests first. For bugs, ensure you have a regression test.
+	* **Code**: Implement the solution according to your design.
+	* **Verify**: Ensure local tests pass.
+
+	* **Git Discipline**: Work locally only. You may create/checkout branches and stage/commit locally, but do **NOT** push, and do **NOT** create PRs (e.g., via 'gh pr create') during this phase.
 
 3.  **Final Step**: Update '%[1]s/worklog.md' with a summary of changes and test results.
 
@@ -104,6 +107,7 @@ Ultrathink! Fix all P0/P1 issues reported in the review.
 1.  **Address Issues**: Systematically fix every P0 and P1 issue listed.
 2.  **Verify**: Ensure existing tests pass and add new tests if the review indicated missing coverage.
 3.  **Update Log**: Append a "Fix Summary" to '%[1]s/worklog.md' explaining what was changed.
+4.  **Git Discipline**: Work locally only. You may create/checkout branches and stage/commit locally, but do **NOT** push, and do **NOT** create PRs (e.g., via 'gh pr create') during this phase.
 
 Hints: if needed, Use the 'gh' CLI to inspect GitHub issues/PRs just like 'git'; if either tool lacks auth, run '~/.setup-git.sh' to configure both before proceeding.
 
