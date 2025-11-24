@@ -195,6 +195,14 @@ func (c *MCPClient) BranchReadFile(branchID, filePath string) (map[string]any, e
 	return c.CallTool("branch_read_file", map[string]any{"branch_id": branchID, "file_path": filePath})
 }
 
+func (c *MCPClient) BranchOutput(branchID string, fullOutput bool) (map[string]any, error) {
+	args := map[string]any{"branch_id": branchID}
+	if fullOutput {
+		args["full_output"] = true
+	}
+	return c.CallTool("branch_output", args)
+}
+
 func parseSSEStream(r io.Reader) ([]byte, string, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
