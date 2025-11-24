@@ -119,8 +119,9 @@ Ultrathink! Analyze first, then code. Avoid over-engineering.
 `
 
 const (
-	statusCompleted      = "completed"
-	statusIterationLimit = "iteration_limit"
+	statusCompleted         = "completed"
+	statusIterationLimit    = "iteration_limit"
+	statusFinishedWithError = "FINISHED_WITH_ERROR"
 
 	iterationLimitSummary = "Reached iteration limit before clean review sign-off."
 	defaultSuccessSummary = "Workflow completed successfully."
@@ -312,6 +313,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	var (
 		finalReport    map[string]any
 		finished       bool
+		errorState     bool
 		reviewCount    int
 		totalToolCalls int
 		lastTurn       int
@@ -340,6 +342,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		if len(choice.ToolCalls) > 0 {
 			turnToolCount := 0
 			reviewCompleted := false
+			stopDueToInstruction := false
 			for _, tc := range choice.ToolCalls {
 				turnToolCount++
 				totalToolCalls++
@@ -370,6 +373,17 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 					emitter.ItemCompleted(itemID, resultStatus(result), duration, eventBranchID(result), summarizeToolResult(result))
 				}
 
+				if instr, summaryMsg, details := toolInstruction(result); instr != "" {
+					if emitter != nil {
+						emitter.EmitError("tool_instruction", summaryMsg, map[string]any{"instruction": instr})
+					}
+					finalReport = buildErrorFinalReport(opts.Publish.Task, summaryMsg, instr, details)
+					finished = true
+					errorState = true
+					stopDueToInstruction = true
+					break
+				}
+
 				if tc.Function.Name == "execute_agent" {
 					if agent, _ := args["agent"].(string); agent == "review_code" {
 						if status, _ := result["status"].(string); status == "success" {
@@ -380,6 +394,9 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 			}
 			if emitter != nil {
 				emitter.TurnCompleted(turnID, i, turnToolCount, false)
+			}
+			if stopDueToInstruction {
+				break
 			}
 			if reviewCompleted {
 				reviewCount++
@@ -425,6 +442,10 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	}
 
 	if finished {
+		if errorState {
+			ensureReportDefaults(finalReport, opts.Publish.Task, statusFinishedWithError, true)
+			return finalReport, nil
+		}
 		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
 		_, err := runPublish(finalReport, true)
 		if err != nil {
@@ -463,6 +484,7 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	var (
 		finalReport map[string]any
 		finished    bool
+		errorState  bool
 		reviewCount int
 	)
 
@@ -480,6 +502,7 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 
 		if len(choice.ToolCalls) > 0 {
 			reviewCompleted := false
+			stopDueToInstruction := false
 			for _, tc := range choice.ToolCalls {
 				fmt.Printf("tool> %s %s\n", tc.Function.Name, tc.Function.Arguments)
 				var args map[string]any
@@ -497,6 +520,14 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 				fmt.Printf("tool< %s\n", js)
 				messages = append(messages, b.ChatMessage{Role: "tool", ToolCallID: tc.ID, Content: toJSON(result)})
 
+				if instr, summaryMsg, details := toolInstruction(result); instr != "" {
+					finalReport = buildErrorFinalReport(opts.Publish.Task, summaryMsg, instr, details)
+					finished = true
+					errorState = true
+					stopDueToInstruction = true
+					break
+				}
+
 				if tc.Function.Name == "execute_agent" {
 					if agent, _ := args["agent"].(string); agent == "review_code" {
 						if status, _ := result["status"].(string); status == "success" {
@@ -504,6 +535,9 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 						}
 					}
 				}
+			}
+			if stopDueToInstruction {
+				break
 			}
 			if reviewCompleted {
 				reviewCount++
@@ -525,6 +559,10 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	}
 
 	if finished {
+		if errorState {
+			ensureReportDefaults(finalReport, opts.Publish.Task, statusFinishedWithError, true)
+			return finalReport, nil
+		}
 		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
 		_, err := finalizeBranchPush(handler, opts.Publish, finalReport, true, nil)
 		if err != nil {
@@ -608,6 +646,17 @@ func BuildInstructions(report map[string]any) string {
 		if target != "" {
 			parts = append(parts, fmt.Sprintf("Next (if your are allowed or instructed), you can rerun dev-agent with --parent-branch-id %s to continue automated iterations;", target))
 		}
+	case statusFinishedWithError:
+		target := latest
+		if target == "" {
+			target = start
+		}
+		if target != "" {
+			parts = append(parts, fmt.Sprintf("Workflow stopped in FINISHED_WITH_ERROR; inspect manifest %s in Pantheon to diagnose why review_code could not produce its log.", target))
+		} else {
+			parts = append(parts, "Workflow stopped in FINISHED_WITH_ERROR; inspect the Pantheon branch lineage to diagnose why review_code could not produce its log.")
+		}
+		parts = append(parts, "After resolving the underlying issue, rerun dev-agent from the latest healthy branch to resume the workflow.")
 	default:
 		if publishReport != "" {
 			parts = append(parts, "Next step: review the pushed GitHub branch and, based on your process, proceed with the normal PR/merge workflow.")
@@ -799,6 +848,14 @@ func summarizeToolResult(resp map[string]any) string {
 	if errMsg, _ := resp["error"].(string); strings.TrimSpace(errMsg) != "" {
 		return streaming.PromptPreview(errMsg)
 	}
+	if errObj, _ := resp["error"].(map[string]any); errObj != nil {
+		if msg, _ := errObj["message"].(string); strings.TrimSpace(msg) != "" {
+			return streaming.PromptPreview(msg)
+		}
+		if instr, _ := errObj["instruction"].(string); strings.TrimSpace(instr) != "" {
+			return fmt.Sprintf("instruction=%s", strings.TrimSpace(instr))
+		}
+	}
 	if data, _ := resp["data"].(map[string]any); data != nil {
 		if out, _ := data["response"].(string); strings.TrimSpace(out) != "" {
 			return streaming.PromptPreview(out)
@@ -811,4 +868,55 @@ func summarizeToolResult(resp map[string]any) string {
 		return fmt.Sprintf("status=%s", strings.TrimSpace(status))
 	}
 	return ""
+}
+
+func toolInstruction(resp map[string]any) (string, string, map[string]any) {
+	if resp == nil {
+		return "", "", nil
+	}
+	if errObj, ok := resp["error"].(map[string]any); ok {
+		instr := strings.TrimSpace(reportString(errObj, "instruction"))
+		message := strings.TrimSpace(reportString(errObj, "message"))
+		var details map[string]any
+		if det, ok := errObj["details"].(map[string]any); ok && len(det) > 0 {
+			details = det
+		}
+		return instr, message, details
+	}
+	if msg, ok := resp["error"].(string); ok {
+		return "", strings.TrimSpace(msg), nil
+	}
+	return "", "", nil
+}
+
+func buildErrorFinalReport(task, summary, instruction string, details map[string]any) map[string]any {
+	out := map[string]any{
+		"is_finished": true,
+		"status":      statusFinishedWithError,
+	}
+	if strings.TrimSpace(task) != "" {
+		out["task"] = strings.TrimSpace(task)
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = "Workflow halted: review_code failed to produce the required review log."
+	}
+	out["summary"] = summary
+	if instruction != "" {
+		out["instruction"] = instruction
+	}
+	errPayload := map[string]any{}
+	if summary != "" {
+		errPayload["message"] = summary
+	}
+	if instruction != "" {
+		errPayload["instruction"] = instruction
+	}
+	if len(details) > 0 {
+		errPayload["details"] = details
+	}
+	if len(errPayload) > 0 {
+		out["error"] = errPayload
+	}
+	return out
 }
