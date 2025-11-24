@@ -13,6 +13,7 @@ func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
 			{err: notFoundErr(2)},
 			{data: map[string]any{"content": "ok"}},
 		},
+		branchOutputResult: map[string]any{"output": "review stub"},
 	}
 	handler := &ToolHandler{
 		client:        client,
@@ -56,6 +57,7 @@ func TestExecuteAgentReviewCodeFailsAfterMaxAttempts(t *testing.T) {
 			{err: notFoundErr(2)},
 			{err: notFoundErr(3)},
 		},
+		branchOutputResult: map[string]any{"output": "review stub"},
 	}
 	handler := &ToolHandler{
 		client:        client,
@@ -153,6 +155,104 @@ func TestHandleBranchOutputDefaultsFullOutputFalse(t *testing.T) {
 	}
 	if got := client.branchOutputInputs[0]; got.fullOutput {
 		t.Fatalf("expected default full_output=false, got true")
+	}
+}
+
+func TestRunAgentOnceUsesBranchOutputResponse(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputResult: map[string]any{"output": "branch summary"},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+
+	result, branchID, err := handler.runAgentOnce("claude_code", "proj", "parent", "do work")
+	if err != nil {
+		t.Fatalf("runAgentOnce returned error: %v", err)
+	}
+	if branchID == "" {
+		t.Fatalf("expected branch id to be recorded")
+	}
+	if len(client.branchOutputInputs) != 1 {
+		t.Fatalf("expected 1 branch_output call, got %d", len(client.branchOutputInputs))
+	}
+	gotResponse, _ := result["response"].(string)
+	if gotResponse != "branch summary" {
+		t.Fatalf("expected response from branch_output, got %q", gotResponse)
+	}
+	payload, _ := result["branch_output"].(map[string]any)
+	if payload == nil || payload["output"] != "branch summary" {
+		t.Fatalf("expected branch_output payload to be preserved, got %#v", payload)
+	}
+}
+
+func TestExecuteReviewCodeUsesBranchOutputResponse(t *testing.T) {
+	client := &fakeMCPClient{
+		readResults: []branchReadResult{
+			{data: map[string]any{"content": "ok"}},
+		},
+		branchOutputResult: map[string]any{"output": "no P0 findings"},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		defaultProj:   "proj",
+		branchTracker: NewBranchTracker("parent"),
+		workspaceDir:  "/workspace",
+	}
+	args := map[string]any{
+		"agent":            "review_code",
+		"prompt":           "review our changes",
+		"project_name":     "proj",
+		"parent_branch_id": "parent",
+	}
+
+	result, err := handler.executeAgent(args)
+	if err != nil {
+		t.Fatalf("executeAgent returned error: %v", err)
+	}
+	gotResponse, _ := result["response"].(string)
+	if gotResponse != "no P0 findings" {
+		t.Fatalf("expected review_code response from branch_output, got %q", gotResponse)
+	}
+	if len(client.branchOutputInputs) != 1 {
+		t.Fatalf("expected 1 branch_output call, got %d", len(client.branchOutputInputs))
+	}
+}
+
+func TestRunAgentOnceFailsWhenBranchOutputErrors(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputErr: fmt.Errorf("branch output unavailable"),
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+
+	if _, _, err := handler.runAgentOnce("claude_code", "proj", "parent", "do work"); err == nil {
+		t.Fatalf("expected error from branch_output failure")
+	}
+}
+
+func TestRunAgentOnceErrorsOnMissingBranchOutputText(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputResult: map[string]any{"content": "binary-data"},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+
+	_, _, err := handler.runAgentOnce("claude_code", "proj", "parent", "do work")
+	if err == nil {
+		t.Fatalf("expected error when branch_output lacks textual response")
+	}
+	var te ToolExecutionError
+	if !errors.As(err, &te) {
+		t.Fatalf("expected ToolExecutionError, got %T", err)
+	}
+	if te.Msg == "" {
+		t.Fatalf("expected error message describing missing response")
 	}
 }
 

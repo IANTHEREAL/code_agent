@@ -73,3 +73,29 @@ func TestBuildInstructionsMentionsErrorState(t *testing.T) {
 		t.Fatalf("instructions should mention latest branch, got %q", out)
 	}
 }
+
+func TestExtractBranchOutputPrefersBranchOutputPayload(t *testing.T) {
+	data := map[string]any{
+		"branch_output": map[string]any{
+			"output": "publish summary via branch_output",
+		},
+	}
+
+	got := extractBranchOutput(data)
+	if got != "publish summary via branch_output" {
+		t.Fatalf("expected branch_output text, got %q", got)
+	}
+}
+
+func TestExtractBranchOutputFallsBackToBranchManifest(t *testing.T) {
+	data := map[string]any{
+		"branch": map[string]any{
+			"manifest": map[string]any{"summary": "legacy summary"},
+		},
+	}
+
+	got := extractBranchOutput(data)
+	if got != "legacy summary" {
+		t.Fatalf("expected fallback manifest summary, got %q", got)
+	}
+}

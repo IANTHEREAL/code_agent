@@ -682,6 +682,14 @@ func extractBranchOutput(data map[string]any) string {
 	if data == nil {
 		return ""
 	}
+	if bo, _ := data["branch_output"].(map[string]any); bo != nil {
+		if out := branchOutputText(bo); out != "" {
+			return out
+		}
+	}
+	if resp, _ := data["response"].(string); strings.TrimSpace(resp) != "" {
+		return strings.TrimSpace(resp)
+	}
 	branch, _ := data["branch"].(map[string]any)
 	if branch == nil {
 		return ""
@@ -697,6 +705,28 @@ func extractBranchOutput(data map[string]any) string {
 	if manifest, _ := branch["manifest"].(map[string]any); manifest != nil {
 		if summary, _ := manifest["summary"].(string); strings.TrimSpace(summary) != "" {
 			return strings.TrimSpace(summary)
+		}
+	}
+	return ""
+}
+
+func branchOutputText(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	for _, key := range []string{"output", "response", "summary"} {
+		if text, ok := payload[key].(string); ok && strings.TrimSpace(text) != "" {
+			return strings.TrimSpace(text)
+		}
+	}
+	if latest, _ := payload["latest_snap"].(map[string]any); latest != nil {
+		if text := branchOutputText(latest); text != "" {
+			return text
+		}
+	}
+	if manifest, _ := payload["manifest"].(map[string]any); manifest != nil {
+		if text := branchOutputText(manifest); text != "" {
+			return text
 		}
 	}
 	return ""
