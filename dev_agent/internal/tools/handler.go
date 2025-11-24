@@ -12,6 +12,13 @@ type ToolExecutionError struct{ Msg string }
 
 func (e ToolExecutionError) Error() string { return e.Msg }
 
+type AgentClient interface {
+	ParallelExplore(projectName, parentBranchID string, prompts []string, agent string, numBranches int) (map[string]any, error)
+	GetBranch(branchID string) (map[string]any, error)
+	BranchReadFile(branchID, filePath string) (map[string]any, error)
+	BranchOutput(branchID string) (map[string]any, error)
+}
+
 type BranchTracker struct {
 	start  string
 	latest string
@@ -36,12 +43,12 @@ func (t *BranchTracker) Range() map[string]string {
 }
 
 type ToolHandler struct {
-	client        *MCPClient
+	client        AgentClient
 	defaultProj   string
 	branchTracker *BranchTracker
 }
 
-func NewToolHandler(client *MCPClient, defaultProject string, startBranch string) *ToolHandler {
+func NewToolHandler(client AgentClient, defaultProject string, startBranch string) *ToolHandler {
 	return &ToolHandler{
 		client:        client,
 		defaultProj:   defaultProject,
@@ -133,12 +140,22 @@ func (h *ToolHandler) executeAgent(arguments map[string]any) (map[string]any, er
 	if status, ok := statusResp["status"]; ok {
 		result["status"] = status
 	}
-	if out, ok := statusResp["output"].(string); ok && strings.TrimSpace(out) != "" {
-		result["response"] = strings.TrimSpace(out)
-	} else if manifest, ok := statusResp["manifest"].(map[string]any); ok {
-		if summary, ok := manifest["summary"].(string); ok && strings.TrimSpace(summary) != "" {
-			result["response"] = strings.TrimSpace(summary)
+
+	responseText := selectResponseText(statusResp)
+
+	branchOutput, err := h.client.BranchOutput(branchID)
+	if err != nil {
+		logx.Errorf("branch_output failed for %s: %v", branchID, err)
+		result["branch_output_error"] = err.Error()
+	} else if len(branchOutput) > 0 {
+		result["branch_output"] = branchOutput
+		if boText := selectResponseText(branchOutput); boText != "" {
+			responseText = boText
 		}
+	}
+
+	if responseText != "" {
+		result["response"] = responseText
 	}
 
 	return result, nil
@@ -258,6 +275,35 @@ func ExtractBranchID(m map[string]any) string {
 
 func (h *ToolHandler) errorPayload(msg string) map[string]any {
 	return map[string]any{"status": "error", "error": msg}
+}
+
+func selectResponseText(m map[string]any) string {
+	if m == nil {
+		return ""
+	}
+	for _, key := range []string{"response", "output", "summary"} {
+		if val := stringFieldValue(m, key); val != "" {
+			return val
+		}
+	}
+	if manifest, ok := m["manifest"].(map[string]any); ok {
+		if summary := selectResponseText(manifest); summary != "" {
+			return summary
+		}
+	}
+	return ""
+}
+
+func stringFieldValue(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	if val, ok := m[key].(string); ok {
+		if trimmed := strings.TrimSpace(val); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func stringsLower(v any) string {
