@@ -21,6 +21,7 @@ type agentClient interface {
 	ParallelExplore(projectName, parentBranchID string, prompts []string, agent string, numBranches int) (map[string]any, error)
 	GetBranch(branchID string) (map[string]any, error)
 	BranchReadFile(branchID, filePath string) (map[string]any, error)
+	BranchOutput(branchID string, fullOutput bool) (map[string]any, error)
 }
 
 var _ agentClient = (*MCPClient)(nil)
@@ -106,6 +107,8 @@ func (h *ToolHandler) Handle(call ToolCall) map[string]any {
 		res, err = h.checkStatus(args)
 	case "read_artifact":
 		res, err = h.readArtifact(args)
+	case "branch_output":
+		res, err = h.branchOutput(args)
 	default:
 		err = ToolExecutionError{Msg: fmt.Sprintf("Unsupported tool: %s", name)}
 	}
@@ -287,6 +290,24 @@ func (h *ToolHandler) readArtifact(arguments map[string]any) (map[string]any, er
 	return h.client.BranchReadFile(branchID, path)
 }
 
+func (h *ToolHandler) branchOutput(arguments map[string]any) (map[string]any, error) {
+	rawBranchID, _ := arguments["branch_id"].(string)
+	branchID := strings.TrimSpace(rawBranchID)
+	if branchID == "" {
+		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
+	}
+	fullOutput := false
+	if v, ok := arguments["full_output"]; ok {
+		flag, ok := v.(bool)
+		if !ok {
+			return nil, ToolExecutionError{Msg: "`full_output` must be a boolean"}
+		}
+		fullOutput = flag
+	}
+	logx.Infof("Retrieving branch_output for %s (full_output=%t)", branchID, fullOutput)
+	return h.client.BranchOutput(branchID, fullOutput)
+}
+
 func ExtractBranchID(m map[string]any) string {
 	if m == nil {
 		return ""
@@ -406,6 +427,21 @@ func GetToolDefinitions() []map[string]any {
 						"path":      map[string]any{"type": "string", "description": "Artifact path or filename."},
 					},
 					"required": []any{"branch_id", "path"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "branch_output",
+				"description": "Retrieve the text output that a branch produced.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"branch_id":   map[string]any{"type": "string", "description": "Branch that produced the output."},
+						"full_output": map[string]any{"type": "boolean", "description": "Return the complete output log instead of any default truncation."},
+					},
+					"required": []any{"branch_id"},
 				},
 			},
 		},

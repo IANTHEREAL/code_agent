@@ -88,6 +88,74 @@ func TestExecuteAgentReviewCodeFailsAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestHandleBranchOutputRequiresBranchID(t *testing.T) {
+	handler := &ToolHandler{
+		client:        &fakeMCPClient{},
+		branchTracker: NewBranchTracker("parent"),
+	}
+	call := ToolCall{}
+	call.Function.Name = "branch_output"
+	call.Function.Arguments = "{}"
+
+	res := handler.Handle(call)
+	if status := res["status"]; status != "error" {
+		t.Fatalf("expected status error, got %#v", status)
+	}
+	errPayload, _ := res["error"].(map[string]any)
+	if errPayload["message"] != "`branch_id` is required" {
+		t.Fatalf("expected missing branch_id message, got %#v", errPayload["message"])
+	}
+}
+
+func TestHandleBranchOutputCallsClient(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputResult: map[string]any{"output": "short"},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+	call := ToolCall{}
+	call.Function.Name = "branch_output"
+	call.Function.Arguments = `{"branch_id":"branch-123","full_output":true}`
+
+	res := handler.Handle(call)
+	if status := res["status"]; status != "success" {
+		t.Fatalf("expected status success, got %#v", status)
+	}
+	data, _ := res["data"].(map[string]any)
+	if data["output"] != "short" {
+		t.Fatalf("unexpected data payload %#v", data)
+	}
+	if len(client.branchOutputInputs) != 1 {
+		t.Fatalf("expected 1 branch_output call, got %d", len(client.branchOutputInputs))
+	}
+	if got := client.branchOutputInputs[0]; got.branchID != "branch-123" || !got.fullOutput {
+		t.Fatalf("unexpected branch_output args: %#v", got)
+	}
+}
+
+func TestHandleBranchOutputDefaultsFullOutputFalse(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputResult: map[string]any{"output": "partial"},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+	call := ToolCall{}
+	call.Function.Name = "branch_output"
+	call.Function.Arguments = `{"branch_id":"branch-234"}`
+
+	_ = handler.Handle(call)
+	if len(client.branchOutputInputs) != 1 {
+		t.Fatalf("expected 1 branch_output call, got %d", len(client.branchOutputInputs))
+	}
+	if got := client.branchOutputInputs[0]; got.fullOutput {
+		t.Fatalf("expected default full_output=false, got true")
+	}
+}
+
 type branchReadInput struct {
 	branchID string
 	path     string
@@ -102,6 +170,14 @@ type fakeMCPClient struct {
 	parallelExploreCalls int
 	readResults          []branchReadResult
 	branchReadInputs     []branchReadInput
+	branchOutputInputs   []branchOutputInput
+	branchOutputResult   map[string]any
+	branchOutputErr      error
+}
+
+type branchOutputInput struct {
+	branchID   string
+	fullOutput bool
 }
 
 func (f *fakeMCPClient) ParallelExplore(projectName, parentBranchID string, prompts []string, agent string, numBranches int) (map[string]any, error) {
@@ -127,6 +203,17 @@ func (f *fakeMCPClient) BranchReadFile(branchID, filePath string) (map[string]an
 	next := f.readResults[0]
 	f.readResults = f.readResults[1:]
 	return next.data, next.err
+}
+
+func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[string]any, error) {
+	f.branchOutputInputs = append(f.branchOutputInputs, branchOutputInput{branchID: branchID, fullOutput: fullOutput})
+	if f.branchOutputErr != nil {
+		return nil, f.branchOutputErr
+	}
+	if f.branchOutputResult == nil {
+		return nil, fmt.Errorf("no stub branch_output result for branch %s", branchID)
+	}
+	return f.branchOutputResult, nil
 }
 
 func notFoundErr(attempt int) error {
