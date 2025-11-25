@@ -203,7 +203,10 @@ func (h *ToolHandler) executeReviewAgent(project, parent, prompt string) (map[st
 			return nil, err
 		}
 		lastBranch = branchID
-		if _, err := h.client.BranchReadFile(branchID, artifactPath); err == nil {
+		if artifact, err := h.client.BranchReadFile(branchID, artifactPath); err == nil {
+			if content, ok := artifact["content"].(string); ok && strings.TrimSpace(content) != "" {
+				result["review_report"] = content
+			}
 			return result, nil
 		} else if !isNotFoundError(err) {
 			return nil, err

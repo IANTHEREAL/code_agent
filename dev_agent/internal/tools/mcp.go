@@ -192,7 +192,17 @@ func (c *MCPClient) GetBranch(branchID string) (map[string]any, error) {
 }
 
 func (c *MCPClient) BranchReadFile(branchID, filePath string) (map[string]any, error) {
-	return c.CallTool("branch_read_file", map[string]any{"branch_id": branchID, "file_path": filePath})
+	resp, err := c.CallTool("branch_read_file", map[string]any{"branch_id": branchID, "file_path": filePath})
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("branch_read_file returned empty response")
+	}
+	if errVal, ok := resp["error"]; ok && errVal != nil {
+		return nil, payloadError(errVal)
+	}
+	return resp, nil
 }
 
 func (c *MCPClient) BranchOutput(branchID string, fullOutput bool) (map[string]any, error) {
@@ -321,4 +331,27 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func payloadError(val any) error {
+	switch v := val.(type) {
+	case string:
+		msg := strings.TrimSpace(v)
+		if msg == "" {
+			return fmt.Errorf("unknown error")
+		}
+		return fmt.Errorf("%s", msg)
+	case map[string]any:
+		if msg, ok := v["message"].(string); ok && strings.TrimSpace(msg) != "" {
+			return fmt.Errorf("%s", strings.TrimSpace(msg))
+		}
+		if data, err := json.Marshal(v); err == nil {
+			return fmt.Errorf("%s", string(data))
+		}
+	default:
+		if v != nil {
+			return fmt.Errorf("%v", v)
+		}
+	}
+	return fmt.Errorf("unknown error")
 }

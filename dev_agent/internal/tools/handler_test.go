@@ -3,13 +3,14 @@ package tools
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 )
 
 func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
 	client := &fakeMCPClient{
 		readResults: []branchReadResult{
-			{err: notFoundErr(1)},
+			{data: map[string]any{"error": "404: File or directory not found: /workspace/code_review.log"}},
 			{err: notFoundErr(2)},
 			{data: map[string]any{"content": "ok"}},
 		},
@@ -46,6 +47,9 @@ func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
 	}
 	if got := res["branch_id"]; got != "branch-3" {
 		t.Fatalf("expected final branch_id branch-3, got %#v", got)
+	}
+	if report, ok := res["review_report"].(string); !ok || strings.TrimSpace(report) != "ok" {
+		t.Fatalf("expected review_report=ok, got %#v", res["review_report"])
 	}
 }
 
@@ -156,6 +160,30 @@ func TestHandleBranchOutputDefaultsFullOutputFalse(t *testing.T) {
 	}
 }
 
+func TestReadArtifactHandlesErrorPayload(t *testing.T) {
+	client := &fakeMCPClient{
+		readResults: []branchReadResult{
+			{data: map[string]any{"error": "404: File or directory not found: /workspace/missing.log"}},
+		},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+	call := ToolCall{}
+	call.Function.Name = "read_artifact"
+	call.Function.Arguments = `{"branch_id":"branch-1","path":"/workspace/missing.log"}`
+
+	res := handler.Handle(call)
+	if status := res["status"]; status != "error" {
+		t.Fatalf("expected status error, got %#v", status)
+	}
+	errMsg, _ := res["error"].(string)
+	if !strings.Contains(errMsg, "404") || !strings.Contains(errMsg, "missing.log") {
+		t.Fatalf("unexpected error message %#v", errMsg)
+	}
+}
+
 type branchReadInput struct {
 	branchID string
 	path     string
@@ -202,7 +230,25 @@ func (f *fakeMCPClient) BranchReadFile(branchID, filePath string) (map[string]an
 	}
 	next := f.readResults[0]
 	f.readResults = f.readResults[1:]
-	return next.data, next.err
+	if next.err != nil {
+		return nil, next.err
+	}
+	if next.data != nil {
+		if errVal, ok := next.data["error"]; ok && errVal != nil {
+			switch v := errVal.(type) {
+			case string:
+				return nil, fmt.Errorf("%s", strings.TrimSpace(v))
+			case map[string]any:
+				if msg, ok := v["message"].(string); ok && strings.TrimSpace(msg) != "" {
+					return nil, fmt.Errorf("%s", strings.TrimSpace(msg))
+				}
+				return nil, fmt.Errorf("%v", v)
+			default:
+				return nil, fmt.Errorf("%v", v)
+			}
+		}
+	}
+	return next.data, nil
 }
 
 func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[string]any, error) {
@@ -211,7 +257,7 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 		return nil, f.branchOutputErr
 	}
 	if f.branchOutputResult == nil {
-		return nil, fmt.Errorf("no stub branch_output result for branch %s", branchID)
+		return map[string]any{"output": "ok"}, nil
 	}
 	return f.branchOutputResult, nil
 }

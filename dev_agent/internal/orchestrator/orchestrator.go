@@ -31,8 +31,7 @@ const systemPromptTemplate = `You are a expert software engineer, and a TDD (Tes
 1.  **Single Call Per Turn**: Issue exactly one agent/tool call per assistant response; do not batch tool calls because each subsequent agent needs the prior branch's id to extend the branch lineage correctly.
 2.  **Call Agents**: For each workflow step, the agent is invoked through the 'execute_agent'.
 3.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
-4.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from '%[1]s/code_review.log, the path must be an absolute path.
-5.  **Local-Only Before Publish**: Implement/Review/Fix phases are strictly local development. You may create/checkout branches and stage/commit locally, but you must **NOT** run 'git push' or create PRs (e.g., via 'gh pr create') in these phases.
+4.  **Local-Only Before Publish**: Implement/Review/Fix phases are strictly local development. You may create/checkout branches and stage/commit locally, but you must **NOT** run 'git push' or create PRs (e.g., via 'gh pr create') in these phases.
 
 ### Agent Prompt Templates
 
@@ -790,10 +789,9 @@ func sanitizeToolArgs(name string, args map[string]any) map[string]any {
 	case "read_artifact":
 		copyStringField(out, args, "branch_id")
 		copyStringField(out, args, "path")
-	case "check_status":
+	case "branch_output":
 		copyStringField(out, args, "branch_id")
-		copyFloatField(out, args, "timeout_seconds")
-		copyFloatField(out, args, "poll_interval_seconds")
+		copyBoolField(out, args, "full_output")
 	default:
 		for k, v := range args {
 			switch val := v.(type) {
@@ -815,6 +813,12 @@ func copyStringField(dst, src map[string]any, key string) {
 
 func copyFloatField(dst, src map[string]any, key string) {
 	if val, ok := src[key].(float64); ok {
+		dst[key] = val
+	}
+}
+
+func copyBoolField(dst, src map[string]any, key string) {
+	if val, ok := src[key].(bool); ok {
 		dst[key] = val
 	}
 }
