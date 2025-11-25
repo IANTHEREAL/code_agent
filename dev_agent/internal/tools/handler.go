@@ -287,6 +287,13 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
 		if should_wait && (status == "succeed" || status == "failed") {
+			if status == "failed" {
+				details := map[string]any{"status": status}
+				if branchID := ExtractBranchID(resp); branchID != "" {
+					details["branch_id"] = branchID
+				}
+				return nil, ToolExecutionError{Msg: "branch reported failed status", Details: details}
+			}
 			return resp, nil
 		}
 		if time.Now().After(deadline) {
