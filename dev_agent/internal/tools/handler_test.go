@@ -156,6 +156,114 @@ func TestHandleBranchOutputDefaultsFullOutputFalse(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentUsesBranchOutputForResponse(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputResult: map[string]any{
+			"output":    "agent summary",
+			"truncated": false,
+		},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		defaultProj:   "proj",
+		branchTracker: NewBranchTracker("parent"),
+	}
+	args := map[string]any{
+		"agent":            "implement",
+		"prompt":           "do work",
+		"parent_branch_id": "parent",
+		"project_name":     "proj",
+	}
+
+	res, err := handler.executeAgent(args)
+	if err != nil {
+		t.Fatalf("executeAgent returned error: %v", err)
+	}
+	if got := res["response"]; got != "agent summary" {
+		t.Fatalf("expected response from branch_output, got %#v", got)
+	}
+	if got := res["branch_output"]; got == nil {
+		t.Fatalf("expected branch_output payload on result")
+	}
+	if len(client.branchOutputInputs) != 1 {
+		t.Fatalf("expected 1 branch_output call, got %d", len(client.branchOutputInputs))
+	}
+	if client.branchOutputInputs[0].fullOutput {
+		t.Fatalf("expected initial branch_output call to skip full_output")
+	}
+	if truncated, _ := res["response_truncated"].(bool); truncated {
+		t.Fatalf("expected response_truncated=false, got true")
+	}
+}
+
+func TestExecuteAgentSkipsBranchOutputForReviewCode(t *testing.T) {
+	client := &fakeMCPClient{
+		readResults: []branchReadResult{
+			{data: map[string]any{"content": "ok"}},
+		},
+		branchOutputResult: map[string]any{
+			"output": "should not be read",
+		},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		defaultProj:   "proj",
+		branchTracker: NewBranchTracker("parent"),
+		workspaceDir:  "/workspace",
+	}
+
+	args := map[string]any{
+		"agent":            "review_code",
+		"prompt":           "review the latest changes",
+		"parent_branch_id": "parent",
+		"project_name":     "proj",
+	}
+
+	if _, err := handler.executeAgent(args); err != nil {
+		t.Fatalf("executeAgent returned error: %v", err)
+	}
+	if calls := len(client.branchOutputInputs); calls != 0 {
+		t.Fatalf("expected no branch_output calls for review_code, got %d", calls)
+	}
+}
+
+func TestExecuteAgentRequestsFullBranchOutputWhenTruncated(t *testing.T) {
+	client := &fakeMCPClient{
+		branchOutputResults: []map[string]any{
+			{"output": "partial log", "truncated": true},
+			{"output": "complete log", "truncated": false},
+		},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		defaultProj:   "proj",
+		branchTracker: NewBranchTracker("parent"),
+	}
+	args := map[string]any{
+		"agent":            "implement",
+		"prompt":           "do work",
+		"parent_branch_id": "parent",
+		"project_name":     "proj",
+	}
+
+	res, err := handler.executeAgent(args)
+	if err != nil {
+		t.Fatalf("executeAgent returned error: %v", err)
+	}
+	if got := res["response"]; got != "complete log" {
+		t.Fatalf("expected response from full branch_output, got %#v", got)
+	}
+	if len(client.branchOutputInputs) != 2 {
+		t.Fatalf("expected 2 branch_output calls, got %d", len(client.branchOutputInputs))
+	}
+	if client.branchOutputInputs[1].fullOutput != true {
+		t.Fatalf("expected second branch_output call with full_output=true")
+	}
+	if truncated, _ := res["response_truncated"].(bool); truncated {
+		t.Fatalf("expected final response_truncated=false, got true")
+	}
+}
+
 type branchReadInput struct {
 	branchID string
 	path     string
@@ -172,6 +280,7 @@ type fakeMCPClient struct {
 	branchReadInputs     []branchReadInput
 	branchOutputInputs   []branchOutputInput
 	branchOutputResult   map[string]any
+	branchOutputResults  []map[string]any
 	branchOutputErr      error
 }
 
@@ -209,6 +318,11 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 	f.branchOutputInputs = append(f.branchOutputInputs, branchOutputInput{branchID: branchID, fullOutput: fullOutput})
 	if f.branchOutputErr != nil {
 		return nil, f.branchOutputErr
+	}
+	if len(f.branchOutputResults) > 0 {
+		next := f.branchOutputResults[0]
+		f.branchOutputResults = f.branchOutputResults[1:]
+		return next, nil
 	}
 	if f.branchOutputResult == nil {
 		return nil, fmt.Errorf("no stub branch_output result for branch %s", branchID)

@@ -172,6 +172,21 @@ func (h *ToolHandler) runAgentOnce(agent, project, parent, prompt string) (map[s
 		}
 	}
 
+	if agent != reviewCodeAgent {
+		outputPayload, err := h.loadBranchOutput(branchID)
+		if err != nil {
+			return nil, "", err
+		}
+		if outputPayload != nil {
+			result["branch_output"] = outputPayload
+			truncated := branchOutputTruncated(outputPayload)
+			result["response_truncated"] = truncated
+			if branchResp := branchOutputString(outputPayload); branchResp != "" {
+				result["response"] = branchResp
+			}
+		}
+	}
+
 	return result, branchID, nil
 }
 
@@ -306,6 +321,45 @@ func (h *ToolHandler) branchOutput(arguments map[string]any) (map[string]any, er
 	}
 	logx.Infof("Retrieving branch_output for %s (full_output=%t)", branchID, fullOutput)
 	return h.client.BranchOutput(branchID, fullOutput)
+}
+
+func (h *ToolHandler) loadBranchOutput(branchID string) (map[string]any, error) {
+	id := strings.TrimSpace(branchID)
+	if id == "" {
+		return nil, nil
+	}
+	payload, err := h.client.BranchOutput(id, false)
+	if err != nil {
+		return nil, err
+	}
+	if branchOutputTruncated(payload) {
+		logx.Infof("Branch %s output truncated; requesting full output", id)
+		payload, err = h.client.BranchOutput(id, true)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return payload, nil
+}
+
+func branchOutputTruncated(payload map[string]any) bool {
+	if payload == nil {
+		return false
+	}
+	if v, ok := payload["truncated"].(bool); ok {
+		return v
+	}
+	return false
+}
+
+func branchOutputString(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if out, ok := payload["output"].(string); ok {
+		return strings.TrimSpace(out)
+	}
+	return ""
 }
 
 func ExtractBranchID(m map[string]any) string {
