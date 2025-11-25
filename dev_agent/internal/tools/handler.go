@@ -164,13 +164,29 @@ func (h *ToolHandler) runAgentOnce(agent, project, parent, prompt string) (map[s
 	if status, ok := statusResp["status"]; ok {
 		result["status"] = status
 	}
+
+	responseText := ""
 	if out, ok := statusResp["output"].(string); ok && strings.TrimSpace(out) != "" {
-		result["response"] = strings.TrimSpace(out)
+		responseText = strings.TrimSpace(out)
 	} else if manifest, ok := statusResp["manifest"].(map[string]any); ok {
 		if summary, ok := manifest["summary"].(string); ok && strings.TrimSpace(summary) != "" {
-			result["response"] = strings.TrimSpace(summary)
+			responseText = strings.TrimSpace(summary)
 		}
 	}
+
+	branchOutputResponse, err := h.client.BranchOutput(branchID, true)
+	if err != nil {
+		return nil, "", err
+	} else {
+		branchOutput := branchOutputString(branchOutputResponse)
+		if branchOutput != "" {
+			responseText = branchOutput
+		}
+	}
+	if strings.TrimSpace(responseText) == "" {
+		return nil, "", ToolExecutionError{Msg: "branch_output returned no textual output"}
+	}
+	result["response"] = strings.TrimSpace(responseText)
 
 	return result, branchID, nil
 }
@@ -341,6 +357,16 @@ func ExtractBranchID(m map[string]any) string {
 				}
 			}
 		}
+	}
+	return ""
+}
+
+func branchOutputString(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if out, ok := payload["output"].(string); ok {
+		return strings.TrimSpace(out)
 	}
 	return ""
 }
