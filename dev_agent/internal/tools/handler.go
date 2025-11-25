@@ -4,13 +4,34 @@ import (
 	"dev_agent/internal/logx"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
-type ToolExecutionError struct{ Msg string }
+type ToolExecutionError struct {
+	Msg         string
+	Instruction string
+	Details     map[string]any
+}
 
 func (e ToolExecutionError) Error() string { return e.Msg }
+
+type agentClient interface {
+	ParallelExplore(projectName, parentBranchID string, prompts []string, agent string, numBranches int) (map[string]any, error)
+	GetBranch(branchID string) (map[string]any, error)
+	BranchReadFile(branchID, filePath string) (map[string]any, error)
+	BranchOutput(branchID string, fullOutput bool) (map[string]any, error)
+}
+
+var _ agentClient = (*MCPClient)(nil)
+
+const (
+	reviewCodeAgent            = "review_code"
+	reviewArtifactName         = "code_review.log"
+	reviewMaxAttempts          = 3
+	instructionFinishedWithErr = "FINISHED_WITH_ERROR"
+)
 
 type BranchTracker struct {
 	start  string
@@ -36,16 +57,18 @@ func (t *BranchTracker) Range() map[string]string {
 }
 
 type ToolHandler struct {
-	client        *MCPClient
+	client        agentClient
 	defaultProj   string
 	branchTracker *BranchTracker
+	workspaceDir  string
 }
 
-func NewToolHandler(client *MCPClient, defaultProject string, startBranch string) *ToolHandler {
+func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
 	return &ToolHandler{
 		client:        client,
 		defaultProj:   defaultProject,
 		branchTracker: NewBranchTracker(startBranch),
+		workspaceDir:  strings.TrimSpace(workspaceDir),
 	}
 }
 
@@ -64,12 +87,12 @@ type ToolCall struct {
 func (h *ToolHandler) Handle(call ToolCall) map[string]any {
 	name := call.Function.Name
 	if name == "" {
-		return h.errorPayload("Missing tool name in call.")
+		return h.errorPayload(ToolExecutionError{Msg: "Missing tool name in call."})
 	}
 	var args map[string]any
 	if call.Function.Arguments != "" {
 		if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
-			return h.errorPayload(fmt.Sprintf("Invalid JSON arguments: %v", err))
+			return h.errorPayload(ToolExecutionError{Msg: fmt.Sprintf("Invalid JSON arguments: %v", err)})
 		}
 	} else {
 		args = map[string]any{}
@@ -84,11 +107,13 @@ func (h *ToolHandler) Handle(call ToolCall) map[string]any {
 		res, err = h.checkStatus(args)
 	case "read_artifact":
 		res, err = h.readArtifact(args)
+	case "branch_output":
+		res, err = h.branchOutput(args)
 	default:
 		err = ToolExecutionError{Msg: fmt.Sprintf("Unsupported tool: %s", name)}
 	}
 	if err != nil {
-		return h.errorPayload(err.Error())
+		return h.errorPayload(err)
 	}
 	return map[string]any{"status": "success", "data": res}
 }
@@ -106,42 +131,107 @@ func (h *ToolHandler) executeAgent(arguments map[string]any) (map[string]any, er
 		return nil, ToolExecutionError{Msg: "missing required arguments"}
 	}
 
+	if agent == reviewCodeAgent {
+		return h.executeReviewAgent(project, parent, prompt)
+	}
+	result, _, err := h.runAgentOnce(agent, project, parent, prompt)
+	return result, err
+}
+
+func (h *ToolHandler) runAgentOnce(agent, project, parent, prompt string) (map[string]any, string, error) {
 	logx.Infof("Executing agent %s on project %s from parent %s", agent, project, parent)
 	resp, err := h.client.ParallelExplore(project, parent, []string{prompt}, agent, 1)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if isErr, ok := resp["isError"].(bool); ok && isErr {
-		return nil, ToolExecutionError{Msg: fmt.Sprintf("%v", resp["error"])}
+		return nil, "", ToolExecutionError{Msg: fmt.Sprintf("%v", resp["error"])}
 	}
 	branchID := ExtractBranchID(resp)
 	if branchID == "" {
-		return nil, ToolExecutionError{Msg: "Missing branch id in parallel_explore response."}
+		return nil, "", ToolExecutionError{Msg: "Missing branch id in parallel_explore response."}
 	}
 	h.branchTracker.Record(branchID)
 
 	result := map[string]any{"parallel_explore": resp, "branch_id": branchID}
 
 	logx.Infof("Waiting for branch %s to complete.", branchID)
-	statusArgs := map[string]any{"branch_id": branchID}
-
-	statusResp, err := h.checkStatus(statusArgs)
+	statusResp, err := h.checkStatus(map[string]any{"branch_id": branchID})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	result["branch"] = statusResp
 	if status, ok := statusResp["status"]; ok {
 		result["status"] = status
 	}
+
+	responseText := ""
 	if out, ok := statusResp["output"].(string); ok && strings.TrimSpace(out) != "" {
-		result["response"] = strings.TrimSpace(out)
+		responseText = strings.TrimSpace(out)
 	} else if manifest, ok := statusResp["manifest"].(map[string]any); ok {
 		if summary, ok := manifest["summary"].(string); ok && strings.TrimSpace(summary) != "" {
-			result["response"] = strings.TrimSpace(summary)
+			responseText = strings.TrimSpace(summary)
 		}
 	}
 
-	return result, nil
+	branchOutputResponse, err := h.client.BranchOutput(branchID, true)
+	if err != nil {
+		return nil, "", err
+	} else {
+		branchOutput := branchOutputString(branchOutputResponse)
+		if branchOutput != "" {
+			responseText = branchOutput
+		}
+	}
+	if strings.TrimSpace(responseText) == "" {
+		return nil, "", ToolExecutionError{Msg: "branch_output returned no textual output"}
+	}
+	result["response"] = strings.TrimSpace(responseText)
+
+	return result, branchID, nil
+}
+
+func (h *ToolHandler) executeReviewAgent(project, parent, prompt string) (map[string]any, error) {
+	artifactPath := h.reviewLogPath()
+	if artifactPath == "" {
+		return nil, ToolExecutionError{Msg: "workspace directory not configured for review_code validation"}
+	}
+	var lastBranch string
+	for attempt := 1; attempt <= reviewMaxAttempts; attempt++ {
+		result, branchID, err := h.runAgentOnce(reviewCodeAgent, project, parent, prompt)
+		if err != nil {
+			return nil, err
+		}
+		lastBranch = branchID
+		if artifact, err := h.client.BranchReadFile(branchID, artifactPath); err == nil {
+			if content, ok := artifact["content"].(string); ok && strings.TrimSpace(content) != "" {
+				result["review_report"] = content
+			}
+			return result, nil
+		} else if !isNotFoundError(err) {
+			return nil, err
+		}
+		logx.Warningf("review_code attempt %d/%d did not produce %s (branch=%s)", attempt, reviewMaxAttempts, artifactPath, branchID)
+	}
+	details := map[string]any{
+		"attempts":      reviewMaxAttempts,
+		"artifact_path": artifactPath,
+	}
+	if lastBranch != "" {
+		details["last_branch_id"] = lastBranch
+	}
+	return nil, ToolExecutionError{
+		Msg:         fmt.Sprintf("review_code failed to produce %s after %d attempts", artifactPath, reviewMaxAttempts),
+		Instruction: instructionFinishedWithErr,
+		Details:     details,
+	}
+}
+
+func (h *ToolHandler) reviewLogPath() string {
+	if strings.TrimSpace(h.workspaceDir) == "" {
+		return ""
+	}
+	return filepath.Join(h.workspaceDir, reviewArtifactName)
 }
 
 func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, error) {
@@ -197,6 +287,13 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
 		if should_wait && (status == "succeed" || status == "failed") {
+			if status == "failed" {
+				details := map[string]any{"status": status}
+				if branchID := ExtractBranchID(resp); branchID != "" {
+					details["branch_id"] = branchID
+				}
+				return nil, ToolExecutionError{Msg: "branch reported failed status", Details: details}
+			}
 			return resp, nil
 		}
 		if time.Now().After(deadline) {
@@ -217,6 +314,24 @@ func (h *ToolHandler) readArtifact(arguments map[string]any) (map[string]any, er
 	}
 	logx.Infof("Reading artifact %s from branch %s", path, branchID)
 	return h.client.BranchReadFile(branchID, path)
+}
+
+func (h *ToolHandler) branchOutput(arguments map[string]any) (map[string]any, error) {
+	rawBranchID, _ := arguments["branch_id"].(string)
+	branchID := strings.TrimSpace(rawBranchID)
+	if branchID == "" {
+		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
+	}
+	fullOutput := false
+	if v, ok := arguments["full_output"]; ok {
+		flag, ok := v.(bool)
+		if !ok {
+			return nil, ToolExecutionError{Msg: "`full_output` must be a boolean"}
+		}
+		fullOutput = flag
+	}
+	logx.Infof("Retrieving branch_output for %s (full_output=%t)", branchID, fullOutput)
+	return h.client.BranchOutput(branchID, fullOutput)
 }
 
 func ExtractBranchID(m map[string]any) string {
@@ -256,8 +371,37 @@ func ExtractBranchID(m map[string]any) string {
 	return ""
 }
 
-func (h *ToolHandler) errorPayload(msg string) map[string]any {
-	return map[string]any{"status": "error", "error": msg}
+func branchOutputString(payload map[string]any) string {
+	if payload == nil {
+		return ""
+	}
+	if out, ok := payload["output"].(string); ok {
+		return strings.TrimSpace(out)
+	}
+	return ""
+}
+
+func (h *ToolHandler) errorPayload(err error) map[string]any {
+	if err == nil {
+		return map[string]any{"status": "error", "error": "unknown error"}
+	}
+	if te, ok := err.(ToolExecutionError); ok {
+		payload := map[string]any{}
+		if strings.TrimSpace(te.Msg) != "" {
+			payload["message"] = strings.TrimSpace(te.Msg)
+		}
+		if te.Instruction != "" {
+			payload["instruction"] = te.Instruction
+		}
+		if len(te.Details) > 0 {
+			payload["details"] = te.Details
+		}
+		if len(payload) == 0 {
+			payload["message"] = "tool execution error"
+		}
+		return map[string]any{"status": "error", "error": payload}
+	}
+	return map[string]any{"status": "error", "error": err.Error()}
 }
 
 func stringsLower(v any) string {
@@ -277,6 +421,14 @@ func minFloat(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func isNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "404")
 }
 
 // Tool schema to feed the LLM
@@ -311,6 +463,21 @@ func GetToolDefinitions() []map[string]any {
 						"path":      map[string]any{"type": "string", "description": "Artifact path or filename."},
 					},
 					"required": []any{"branch_id", "path"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "branch_output",
+				"description": "Retrieve the text output that a branch produced.",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"branch_id":   map[string]any{"type": "string", "description": "Branch that produced the output."},
+						"full_output": map[string]any{"type": "boolean", "description": "Return the complete output log instead of any default truncation."},
+					},
+					"required": []any{"branch_id"},
 				},
 			},
 		},

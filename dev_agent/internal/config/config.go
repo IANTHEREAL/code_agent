@@ -64,9 +64,18 @@ func FromEnv() (AgentConfig, error) {
 		return AgentConfig{}, errors.New("MCP_BASE_URL must be a valid HTTP/HTTPS URL")
 	}
 
-	pollInitial := envSeconds("MCP_POLL_INITIAL_SECONDS", 2)
-	pollMax := envSeconds("MCP_POLL_MAX_SECONDS", 30)
-	pollTimeout := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 600)
+	pollInitial, err := envSeconds("MCP_POLL_INITIAL_SECONDS", 2)
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	pollMax, err := envSeconds("MCP_POLL_MAX_SECONDS", 30)
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 600)
+	if err != nil {
+		return AgentConfig{}, err
+	}
 	if pollInitial >= pollMax {
 		return AgentConfig{}, errors.New("MCP_POLL_INITIAL_SECONDS must be less than MCP_POLL_MAX_SECONDS")
 	}
@@ -122,16 +131,16 @@ func FromEnv() (AgentConfig, error) {
 	}, nil
 }
 
-func envSeconds(name string, def int) time.Duration {
+func envSeconds(name string, def int) (time.Duration, error) {
 	v := os.Getenv(name)
 	if v == "" {
-		return time.Duration(def) * time.Second
+		return time.Duration(def) * time.Second, nil
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		panic(fmt.Errorf("invalid integer for %s: %s", name, v))
+		return 0, fmt.Errorf("invalid integer for %s: %s", name, v)
 	}
-	return time.Duration(n) * time.Second
+	return time.Duration(n) * time.Second, nil
 }
 
 // loadDotenv loads key=value pairs into env if not already set.

@@ -22,7 +22,7 @@
 3. Every `execute_agent` call triggers `MCPClient.parallel_explore`, cloning from the tracked parent branch and creating a new branch lineage.
 4. `ToolHandler` polls branch status until completion, recording results and updating stored branch IDs.
 5. Once `review_code` reports zero P0/P1 issues (or iteration limit reached), orchestrator issues a publish prompt to `claude_code` to commit and push the workspace.
-6. Final JSON report includes completion status, summary, original task, branch lineage, and publish metadata (`publish_report`, `publish_pantheon_branch_id`).
+6. Final JSON report includes completion status, summary, original task, branch lineage, and publish metadata (`publish_report`).
 
 ## Component Responsibilities
 - `internal/config.AgentConfig`:
@@ -54,7 +54,7 @@
 ## Observability and Reporting
 - Logging: informational progress (`LLM iteration`, MCP requests) routed through `logx`.
 - Work artifacts expected at `/home/pan/workspace/worklog.md` and `/home/pan/workspace/code_review.log` to coordinate Implement/Fix/Review phases.
-- Final CLI output: pretty-printed JSON that always includes `task`, `summary`, `status`, `is_finished`, `start_branch_id`, `latest_branch_id`, and an `instructions` string. The instructions summarize how to act on the result (e.g., inspect the latest Pantheon branch/manifest, read the `publish_report` to find the GitHub branch, or—when `status` is `iteration_limit`—choose between rerunning dev-agent with the latest branch ID or taking manual action). When publishing succeeds the payload also carries `publish_report` and `publish_pantheon_branch_id`. The publish step now enforces a mandatory report from the agent describing the GitHub repository, branch, commit hash, and where to find the implementation/test logs; missing that report fails the publish step.
+- Final CLI output: pretty-printed JSON that always includes `task`, `summary`, `status`, `is_finished`, `start_branch_id`, `latest_branch_id`, and an `instructions` string. The instructions summarize how to act on the result (e.g., inspect the latest Pantheon branch/manifest, read the `publish_report` to find the GitHub branch, or—when `status` is `iteration_limit`—choose between rerunning dev-agent with the latest branch ID or taking manual action). When publishing succeeds the payload also carries `publish_report`. The publish step now enforces a mandatory report from the agent describing the GitHub repository, branch, commit hash, and where to find the implementation/test logs; missing that report fails the publish step.
 
 ## Failure Modes and Safeguards
 - Configuration errors abort before orchestration starts with descriptive stderr messages.

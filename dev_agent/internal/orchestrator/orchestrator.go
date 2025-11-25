@@ -31,8 +31,7 @@ const systemPromptTemplate = `You are a expert software engineer, and a TDD (Tes
 1.  **Single Call Per Turn**: Issue exactly one agent/tool call per assistant response; do not batch tool calls because each subsequent agent needs the prior branch's id to extend the branch lineage correctly.
 2.  **Call Agents**: For each workflow step, the agent is invoked through the 'execute_agent'.
 3.  **Maintain State**: Track branch lineage ('parent_branch_id') and report any tool errors immediately.
-4.  **Handle Review Data**: Before launching a **Fix** run, you **must** use 'read_artifact' to get the issues from '%[1]s/code_review.log, the path must be an absolute path.
-5.  **Local-Only Before Publish**: Implement/Review/Fix phases are strictly local development. You may create/checkout branches and stage/commit locally, but you must **NOT** run 'git push' or create PRs (e.g., via 'gh pr create') in these phases.
+4.  **Local-Only Before Publish**: Implement/Review/Fix phases are strictly local development. You may create/checkout branches and stage/commit locally, but you must **NOT** run 'git push' or create PRs (e.g., via 'gh pr create') in these phases.
 
 ### Agent Prompt Templates
 
@@ -119,8 +118,9 @@ Ultrathink! Analyze first, then code. Avoid over-engineering.
 `
 
 const (
-	statusCompleted      = "completed"
-	statusIterationLimit = "iteration_limit"
+	statusCompleted         = "completed"
+	statusIterationLimit    = "iteration_limit"
+	statusFinishedWithError = "FINISHED_WITH_ERROR"
 
 	iterationLimitSummary = "Reached iteration limit before clean review sign-off."
 	defaultSuccessSummary = "Workflow completed successfully."
@@ -259,7 +259,6 @@ Include a short publish report that states the repository URL, branch name, and 
 	}
 	if report != nil {
 		report["publish_report"] = publishSummary
-		report["publish_pantheon_branch_id"] = branchID
 	}
 	if branchStatus := strings.TrimSpace(fmt.Sprintf("%v", data["status"])); branchStatus != "" {
 		switch strings.ToLower(branchStatus) {
@@ -312,6 +311,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	var (
 		finalReport    map[string]any
 		finished       bool
+		errorState     bool
 		reviewCount    int
 		totalToolCalls int
 		lastTurn       int
@@ -340,6 +340,7 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 		if len(choice.ToolCalls) > 0 {
 			turnToolCount := 0
 			reviewCompleted := false
+			stopDueToInstruction := false
 			for _, tc := range choice.ToolCalls {
 				turnToolCount++
 				totalToolCalls++
@@ -370,6 +371,17 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 					emitter.ItemCompleted(itemID, resultStatus(result), duration, eventBranchID(result), summarizeToolResult(result))
 				}
 
+				if instr, summaryMsg, details := toolInstruction(result); instr != "" {
+					if emitter != nil {
+						emitter.EmitError("tool_instruction", summaryMsg, map[string]any{"instruction": instr})
+					}
+					finalReport = buildErrorFinalReport(opts.Publish.Task, summaryMsg, instr, details)
+					finished = true
+					errorState = true
+					stopDueToInstruction = true
+					break
+				}
+
 				if tc.Function.Name == "execute_agent" {
 					if agent, _ := args["agent"].(string); agent == "review_code" {
 						if status, _ := result["status"].(string); status == "success" {
@@ -380,6 +392,9 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 			}
 			if emitter != nil {
 				emitter.TurnCompleted(turnID, i, turnToolCount, false)
+			}
+			if stopDueToInstruction {
+				break
 			}
 			if reviewCompleted {
 				reviewCount++
@@ -425,6 +440,10 @@ func Orchestrate(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMes
 	}
 
 	if finished {
+		if errorState {
+			ensureReportDefaults(finalReport, opts.Publish.Task, statusFinishedWithError, true)
+			return finalReport, nil
+		}
 		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
 		_, err := runPublish(finalReport, true)
 		if err != nil {
@@ -463,6 +482,7 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	var (
 		finalReport map[string]any
 		finished    bool
+		errorState  bool
 		reviewCount int
 	)
 
@@ -480,6 +500,7 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 
 		if len(choice.ToolCalls) > 0 {
 			reviewCompleted := false
+			stopDueToInstruction := false
 			for _, tc := range choice.ToolCalls {
 				fmt.Printf("tool> %s %s\n", tc.Function.Name, tc.Function.Arguments)
 				var args map[string]any
@@ -497,6 +518,14 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 				fmt.Printf("tool< %s\n", js)
 				messages = append(messages, b.ChatMessage{Role: "tool", ToolCallID: tc.ID, Content: toJSON(result)})
 
+				if instr, summaryMsg, details := toolInstruction(result); instr != "" {
+					finalReport = buildErrorFinalReport(opts.Publish.Task, summaryMsg, instr, details)
+					finished = true
+					errorState = true
+					stopDueToInstruction = true
+					break
+				}
+
 				if tc.Function.Name == "execute_agent" {
 					if agent, _ := args["agent"].(string); agent == "review_code" {
 						if status, _ := result["status"].(string); status == "success" {
@@ -504,6 +533,9 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 						}
 					}
 				}
+			}
+			if stopDueToInstruction {
+				break
 			}
 			if reviewCompleted {
 				reviewCount++
@@ -525,6 +557,10 @@ func ChatLoop(brain *b.LLMBrain, handler *t.ToolHandler, messages []b.ChatMessag
 	}
 
 	if finished {
+		if errorState {
+			ensureReportDefaults(finalReport, opts.Publish.Task, statusFinishedWithError, true)
+			return finalReport, nil
+		}
 		ensureReportDefaults(finalReport, opts.Publish.Task, statusCompleted, true)
 		_, err := finalizeBranchPush(handler, opts.Publish, finalReport, true, nil)
 		if err != nil {
@@ -574,7 +610,6 @@ func BuildInstructions(report map[string]any) string {
 	latest := reportString(report, "latest_branch_id")
 	status := reportString(report, "status")
 	publishReport := reportString(report, "publish_report")
-	publishBranch := reportString(report, "publish_pantheon_branch_id")
 
 	var parts []string
 
@@ -595,10 +630,6 @@ func BuildInstructions(report map[string]any) string {
 		parts = append(parts, fmt.Sprintf("Publish report describes the GitHub push target: %s", publishReport))
 	}
 
-	if publishBranch != "" {
-		parts = append(parts, fmt.Sprintf("Github Push from pantheon branch: %s.", publishBranch))
-	}
-
 	switch status {
 	case statusIterationLimit:
 		target := latest
@@ -608,6 +639,17 @@ func BuildInstructions(report map[string]any) string {
 		if target != "" {
 			parts = append(parts, fmt.Sprintf("Next (if your are allowed or instructed), you can rerun dev-agent with --parent-branch-id %s to continue automated iterations;", target))
 		}
+	case statusFinishedWithError:
+		target := latest
+		if target == "" {
+			target = start
+		}
+		if target != "" {
+			parts = append(parts, fmt.Sprintf("Workflow stopped in FINISHED_WITH_ERROR; inspect manifest %s in Pantheon to diagnose why review_code could not produce its log.", target))
+		} else {
+			parts = append(parts, "Workflow stopped in FINISHED_WITH_ERROR; inspect the Pantheon branch lineage to diagnose why review_code could not produce its log.")
+		}
+		parts = append(parts, "After resolving the underlying issue, rerun dev-agent from the latest healthy branch to resume the workflow.")
 	default:
 		if publishReport != "" {
 			parts = append(parts, "Next step: review the pushed GitHub branch and, based on your process, proceed with the normal PR/merge workflow.")
@@ -741,10 +783,9 @@ func sanitizeToolArgs(name string, args map[string]any) map[string]any {
 	case "read_artifact":
 		copyStringField(out, args, "branch_id")
 		copyStringField(out, args, "path")
-	case "check_status":
+	case "branch_output":
 		copyStringField(out, args, "branch_id")
-		copyFloatField(out, args, "timeout_seconds")
-		copyFloatField(out, args, "poll_interval_seconds")
+		copyBoolField(out, args, "full_output")
 	default:
 		for k, v := range args {
 			switch val := v.(type) {
@@ -766,6 +807,12 @@ func copyStringField(dst, src map[string]any, key string) {
 
 func copyFloatField(dst, src map[string]any, key string) {
 	if val, ok := src[key].(float64); ok {
+		dst[key] = val
+	}
+}
+
+func copyBoolField(dst, src map[string]any, key string) {
+	if val, ok := src[key].(bool); ok {
 		dst[key] = val
 	}
 }
@@ -799,6 +846,14 @@ func summarizeToolResult(resp map[string]any) string {
 	if errMsg, _ := resp["error"].(string); strings.TrimSpace(errMsg) != "" {
 		return streaming.PromptPreview(errMsg)
 	}
+	if errObj, _ := resp["error"].(map[string]any); errObj != nil {
+		if msg, _ := errObj["message"].(string); strings.TrimSpace(msg) != "" {
+			return streaming.PromptPreview(msg)
+		}
+		if instr, _ := errObj["instruction"].(string); strings.TrimSpace(instr) != "" {
+			return fmt.Sprintf("instruction=%s", strings.TrimSpace(instr))
+		}
+	}
 	if data, _ := resp["data"].(map[string]any); data != nil {
 		if out, _ := data["response"].(string); strings.TrimSpace(out) != "" {
 			return streaming.PromptPreview(out)
@@ -811,4 +866,55 @@ func summarizeToolResult(resp map[string]any) string {
 		return fmt.Sprintf("status=%s", strings.TrimSpace(status))
 	}
 	return ""
+}
+
+func toolInstruction(resp map[string]any) (string, string, map[string]any) {
+	if resp == nil {
+		return "", "", nil
+	}
+	if errObj, ok := resp["error"].(map[string]any); ok {
+		instr := strings.TrimSpace(reportString(errObj, "instruction"))
+		message := strings.TrimSpace(reportString(errObj, "message"))
+		var details map[string]any
+		if det, ok := errObj["details"].(map[string]any); ok && len(det) > 0 {
+			details = det
+		}
+		return instr, message, details
+	}
+	if msg, ok := resp["error"].(string); ok {
+		return "", strings.TrimSpace(msg), nil
+	}
+	return "", "", nil
+}
+
+func buildErrorFinalReport(task, summary, instruction string, details map[string]any) map[string]any {
+	out := map[string]any{
+		"is_finished": true,
+		"status":      statusFinishedWithError,
+	}
+	if strings.TrimSpace(task) != "" {
+		out["task"] = strings.TrimSpace(task)
+	}
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		summary = "Workflow halted: review_code failed to produce the required review log."
+	}
+	out["summary"] = summary
+	if instruction != "" {
+		out["instruction"] = instruction
+	}
+	errPayload := map[string]any{}
+	if summary != "" {
+		errPayload["message"] = summary
+	}
+	if instruction != "" {
+		errPayload["instruction"] = instruction
+	}
+	if len(details) > 0 {
+		errPayload["details"] = details
+	}
+	if len(errPayload) > 0 {
+		out["error"] = errPayload
+	}
+	return out
 }
