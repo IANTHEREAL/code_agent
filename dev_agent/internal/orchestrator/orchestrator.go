@@ -259,7 +259,6 @@ Include a short publish report that states the repository URL, branch name, and 
 	}
 	if report != nil {
 		report["publish_report"] = publishSummary
-		report["publish_pantheon_branch_id"] = branchID
 	}
 	if branchStatus := strings.TrimSpace(fmt.Sprintf("%v", data["status"])); branchStatus != "" {
 		switch strings.ToLower(branchStatus) {
@@ -611,7 +610,6 @@ func BuildInstructions(report map[string]any) string {
 	latest := reportString(report, "latest_branch_id")
 	status := reportString(report, "status")
 	publishReport := reportString(report, "publish_report")
-	publishBranch := reportString(report, "publish_pantheon_branch_id")
 
 	var parts []string
 
@@ -630,10 +628,6 @@ func BuildInstructions(report map[string]any) string {
 
 	if publishReport != "" {
 		parts = append(parts, fmt.Sprintf("Publish report describes the GitHub push target: %s", publishReport))
-	}
-
-	if publishBranch != "" {
-		parts = append(parts, fmt.Sprintf("Github Push from pantheon branch: %s.", publishBranch))
 	}
 
 	switch status {
