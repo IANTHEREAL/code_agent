@@ -269,24 +269,24 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 
 		status := stringsLower(resp["status"])
 		latest_snap_id := stringsLower(resp["latest_snap_id"])
-		should_wait := true
+		hasNewSnapshot := true
 		parent_branch_id := stringsLower(resp["parent_id"])
 		if parent_branch_id != "" {
 			parent_resp, err := h.client.GetBranch(parent_branch_id)
 			if err != nil {
 				logx.Errorf("Error getting parent branch %s: %v", parent_branch_id, err)
-				should_wait = false
+				hasNewSnapshot = false
 			} else {
 				parent_latest_snap_id := stringsLower(parent_resp["latest_snap_id"])
-				// if the parent branch has the same latest snap id, we can continue to wait for the branch to complete
+				// if the parent branch has the same latest snap id, we can continue to wait for the branch to complete or fail
 				if parent_latest_snap_id != "" && parent_latest_snap_id == latest_snap_id {
-					should_wait = false
+					hasNewSnapshot = false
 				}
 			}
 		}
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
-		if should_wait && (status == "succeed" || status == "failed") {
+		if hasNewSnapshot && (status == "succeed" || status == "failed") {
 			if status == "failed" {
 				details := map[string]any{"status": status}
 				if branchID := ExtractBranchID(resp); branchID != "" {
