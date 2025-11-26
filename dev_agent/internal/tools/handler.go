@@ -286,7 +286,10 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 		}
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
-		if hasNewSnapshot && (status == "succeed" || status == "failed") {
+		if status == "succeed" || status == "failed" {
+			if !hasNewSnapshot {
+				logx.Warningf("Branch %s completed with status=%s but no new snapshot was detected relative to parent; continuing anyway.", branchID, status)
+			}
 			if status == "failed" {
 				details := map[string]any{"status": status}
 				if branchID := ExtractBranchID(resp); branchID != "" {

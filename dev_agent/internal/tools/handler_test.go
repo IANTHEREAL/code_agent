@@ -92,6 +92,45 @@ func TestExecuteAgentReviewCodeFailsAfterMaxAttempts(t *testing.T) {
 	}
 }
 
+func TestCheckStatusAllowsTerminalWithoutSnapshot(t *testing.T) {
+	client := &fakeMCPClient{
+		getBranchResponses: map[string][]map[string]any{
+			"branch-child": {
+				{
+					"id":             "branch-child",
+					"status":         "succeed",
+					"latest_snap_id": "snap-1",
+					"parent_id":      "branch-parent",
+				},
+			},
+			"branch-parent": {
+				{
+					"id":             "branch-parent",
+					"status":         "succeed",
+					"latest_snap_id": "snap-1",
+				},
+			},
+		},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+	}
+
+	res, err := handler.checkStatus(map[string]any{
+		"branch_id":                 "branch-child",
+		"timeout_seconds":           0.01,
+		"poll_interval_seconds":     0.001,
+		"max_poll_interval_seconds": 0.001,
+	})
+	if err != nil {
+		t.Fatalf("expected checkStatus to return success, got error: %v", err)
+	}
+	if got := res["id"]; got != "branch-child" {
+		t.Fatalf("expected branch-child result, got %#v", got)
+	}
+}
+
 func TestHandleBranchOutputRequiresBranchID(t *testing.T) {
 	handler := &ToolHandler{
 		client:        &fakeMCPClient{},
@@ -201,6 +240,8 @@ type fakeMCPClient struct {
 	branchOutputInputs   []branchOutputInput
 	branchOutputResult   map[string]any
 	branchOutputErr      error
+	getBranchResponses   map[string][]map[string]any
+	getBranchLog         []string
 }
 
 type branchOutputInput struct {
@@ -217,6 +258,14 @@ func (f *fakeMCPClient) ParallelExplore(projectName, parentBranchID string, prom
 }
 
 func (f *fakeMCPClient) GetBranch(branchID string) (map[string]any, error) {
+	f.getBranchLog = append(f.getBranchLog, branchID)
+	if f.getBranchResponses != nil {
+		if responses := f.getBranchResponses[branchID]; len(responses) > 0 {
+			resp := copyMap(responses[0])
+			f.getBranchResponses[branchID] = responses[1:]
+			return resp, nil
+		}
+	}
 	return map[string]any{
 		"id":     branchID,
 		"status": "succeed",
@@ -264,4 +313,15 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 
 func notFoundErr(attempt int) error {
 	return fmt.Errorf("MCP HTTP 404: attempt %d not found", attempt)
+}
+
+func copyMap(in map[string]any) map[string]any {
+	if in == nil {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
