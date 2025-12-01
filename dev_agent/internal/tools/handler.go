@@ -149,7 +149,7 @@ func (h *ToolHandler) runAgentOnce(agent, project, parent, prompt string) (map[s
 	}
 	branchID := ExtractBranchID(resp)
 	if branchID == "" {
-		return nil, "", ToolExecutionError{Msg: "Missing branch id in parallel_explore response."}
+		return nil, "", ToolExecutionError{Msg: fmt.Sprintf("Missing branch id in parallel_explore response: %v", resp)}
 	}
 	h.branchTracker.Record(branchID)
 
