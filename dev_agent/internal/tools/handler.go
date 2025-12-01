@@ -297,7 +297,10 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 			return resp, nil
 		}
 		if time.Now().After(deadline) {
-			return nil, ToolExecutionError{Msg: fmt.Sprintf("Timed out waiting for branch %s (last status=%s)", branchID, status)}
+			return nil, ToolExecutionError{
+				Msg:         fmt.Sprintf("Timed out waiting for branch %s (last status=%s)", branchID, status),
+				Instruction: instructionFinishedWithErr,
+			}
 		}
 		logx.Infof("Branch %s still active (status=%s). Sleeping %.1fs.", branchID, status, sleep.Seconds())
 		time.Sleep(sleep)
