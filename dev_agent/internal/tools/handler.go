@@ -142,24 +142,50 @@ func (h *ToolHandler) runAgentOnce(agent, project, parent, prompt string) (map[s
 	logx.Infof("Executing agent %s on project %s from parent %s", agent, project, parent)
 	resp, err := h.client.ParallelExplore(project, parent, []string{prompt}, agent, 1)
 	if err != nil {
-		return nil, "", err
+		return nil, "", ToolExecutionError{
+			Msg:         fmt.Sprintf("ParallelExplore failed: %v - %v", err, resp),
+			Instruction: instructionFinishedWithErr,
+		}
 	}
 	if isErr, ok := resp["isError"].(bool); ok && isErr {
-		return nil, "", ToolExecutionError{Msg: fmt.Sprintf("%v", resp["error"])}
+		return nil, "", ToolExecutionError{
+			Msg:         fmt.Sprintf("ParallelExplore returned error: %v", resp["error"]),
+			Instruction: instructionFinishedWithErr,
+		}
 	}
 	branchID := ExtractBranchID(resp)
 	if branchID == "" {
-		return nil, "", ToolExecutionError{Msg: fmt.Sprintf("Missing branch id in parallel_explore response: %v", resp)}
+		return nil, "", ToolExecutionError{
+			Msg:         fmt.Sprintf("Missing branch id in parallel_explore response: %v", resp),
+			Instruction: instructionFinishedWithErr,
+		}
 	}
-	h.branchTracker.Record(branchID)
+	// Don't record branch ID yet - wait until checkStatus succeeds
 
 	result := map[string]any{"parallel_explore": resp, "branch_id": branchID}
 
 	logx.Infof("Waiting for branch %s to complete.", branchID)
 	statusResp, err := h.checkStatus(map[string]any{"branch_id": branchID})
 	if err != nil {
-		return nil, "", err
+		// checkStatus failed - don't record this branch ID
+		if te, ok := err.(ToolExecutionError); ok {
+			// If checkStatus already set FINISHED_WITH_ERROR, propagate it
+			if te.Instruction != "" {
+				return nil, "", te
+			}
+			// Otherwise, add the instruction to stop workflow
+			te.Instruction = instructionFinishedWithErr
+			return nil, "", te
+		}
+		return nil, "", ToolExecutionError{
+			Msg:         fmt.Sprintf("Branch status check failed: %v", err),
+			Instruction: instructionFinishedWithErr,
+		}
 	}
+
+	// Only record branch ID after successful status check
+	h.branchTracker.Record(branchID)
+
 	result["branch"] = statusResp
 	if status, ok := statusResp["status"]; ok {
 		result["status"] = status
@@ -258,13 +284,26 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	for attempt := 1; ; attempt++ {
 		resp, err := h.client.GetBranch(branchID)
 		if err != nil {
-			return nil, err
+			return nil, ToolExecutionError{
+				Msg: fmt.Sprintf("GetBranch API call failed for branch %s: %v", branchID, err),
+			}
 		}
-		// Record/validate branch id
+
+		// Check if the response contains an error (e.g., 404 branch not found)
+		if errMsg, ok := resp["error"]; ok {
+			return nil, ToolExecutionError{
+				Msg: fmt.Sprintf("GetBranch returned error for branch %s: %v", branchID, errMsg),
+			}
+		}
+
+		// Validate branch id in response
 		if id := ExtractBranchID(resp); id != "" {
-			h.branchTracker.Record(id)
+			// Don't record here - let the caller decide when to record
+			// h.branchTracker.Record(id)
 		} else {
-			return nil, ToolExecutionError{Msg: "Branch status response missing branch identifier."}
+			return nil, ToolExecutionError{
+				Msg: fmt.Sprintf("Branch status response missing branch identifier. Response: %v", resp),
+			}
 		}
 
 		status := stringsLower(resp["status"])
@@ -292,7 +331,11 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 				if branchID := ExtractBranchID(resp); branchID != "" {
 					details["branch_id"] = branchID
 				}
-				return nil, ToolExecutionError{Msg: "branch reported failed status", Details: details}
+				return nil, ToolExecutionError{
+					Msg:         fmt.Sprintf("Branch %s reported failed status", branchID),
+					Instruction: instructionFinishedWithErr,
+					Details:     details,
+				}
 			}
 			return resp, nil
 		}
