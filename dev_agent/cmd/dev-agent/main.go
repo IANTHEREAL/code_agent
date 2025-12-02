@@ -66,7 +66,13 @@ func main() {
 
 	brain := b.NewLLMBrain(conf.AzureAPIKey, conf.AzureEndpoint, conf.AzureDeployment, conf.AzureAPIVersion, 3)
 	mcp := t.NewMCPClient(conf.MCPBaseURL)
-	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent, conf.WorkspaceDir)
+	statusPoll := t.StatusPollConfig{
+		Timeout:         conf.PollTimeout,
+		InitialInterval: conf.PollInitial,
+		MaxInterval:     conf.PollMax,
+		BackoffFactor:   conf.PollBackoffFactor,
+	}
+	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent, conf.WorkspaceDir, statusPoll)
 
 	msgs := o.BuildInitialMessages(tsk, conf.ProjectName, conf.WorkspaceDir, *parent)
 	publish := o.PublishOptions{

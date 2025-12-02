@@ -64,7 +64,7 @@ func FromEnv() (AgentConfig, error) {
 		return AgentConfig{}, errors.New("MCP_BASE_URL must be a valid HTTP/HTTPS URL")
 	}
 
-	pollInitial, err := envSeconds("MCP_POLL_INITIAL_SECONDS", 2)
+	pollInitial, err := envSeconds("MCP_POLL_INITIAL_SECONDS", 3)
 	if err != nil {
 		return AgentConfig{}, err
 	}
@@ -72,7 +72,7 @@ func FromEnv() (AgentConfig, error) {
 	if err != nil {
 		return AgentConfig{}, err
 	}
-	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 600)
+	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 1800)
 	if err != nil {
 		return AgentConfig{}, err
 	}
@@ -89,7 +89,7 @@ func FromEnv() (AgentConfig, error) {
 		workspace = "/home/pan/workspace"
 	}
 
-	backoff := 2.0
+	backoff := 1.5
 	if v := os.Getenv("MCP_POLL_BACKOFF_FACTOR"); v != "" {
 		f, err := strconv.ParseFloat(v, 64)
 		if err != nil || f <= 1.0 {

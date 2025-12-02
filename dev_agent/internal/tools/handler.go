@@ -61,18 +61,29 @@ type ToolHandler struct {
 	defaultProj   string
 	branchTracker *BranchTracker
 	workspaceDir  string
+	statusPoll    StatusPollConfig
 }
 
-func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
+func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string, pollCfg ...StatusPollConfig) *ToolHandler {
+	cfg := defaultStatusPollConfig()
+	if len(pollCfg) > 0 {
+		cfg = pollCfg[0]
+	}
+	cfg = sanitizeStatusPollConfig(cfg)
 	return &ToolHandler{
 		client:        client,
 		defaultProj:   defaultProject,
 		branchTracker: NewBranchTracker(startBranch),
 		workspaceDir:  strings.TrimSpace(workspaceDir),
+		statusPoll:    cfg,
 	}
 }
 
 func (h *ToolHandler) BranchRange() map[string]string { return h.branchTracker.Range() }
+
+func (h *ToolHandler) pollConfig() StatusPollConfig {
+	return sanitizeStatusPollConfig(h.statusPoll)
+}
 
 // ToolCall mirrors brain.ToolCall, but we keep it generic here if needed.
 type ToolCall struct {
@@ -82,6 +93,22 @@ type ToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+}
+
+type StatusPollConfig struct {
+	Timeout         time.Duration
+	InitialInterval time.Duration
+	MaxInterval     time.Duration
+	BackoffFactor   float64
+}
+
+func defaultStatusPollConfig() StatusPollConfig {
+	return StatusPollConfig{
+		Timeout:         30 * time.Minute,
+		InitialInterval: 3 * time.Second,
+		MaxInterval:     30 * time.Second,
+		BackoffFactor:   1.5,
+	}
 }
 
 func (h *ToolHandler) Handle(call ToolCall) map[string]any {
@@ -265,22 +292,51 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
-	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
-		timeout = v
-	}
-	poll := 3.0
-	if v, ok := arguments["poll_interval_seconds"].(float64); ok && v > 0 {
-		poll = v
-	}
-	maxPoll := 30.0
-	if v, ok := arguments["max_poll_interval_seconds"].(float64); ok && v >= poll {
-		maxPoll = v
-	}
-	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
-	sleep := time.Duration(poll * float64(time.Second))
 
-	logx.Infof("Checking status for branch %s (timeout=%ds)", branchID, int(timeout))
+	cfg := h.pollConfig()
+
+	timeout := cfg.Timeout
+	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
+		if candidate := secondsToDuration(v); candidate > 0 {
+			timeout = candidate
+		}
+	}
+	if timeout <= 0 {
+		timeout = defaultStatusPollConfig().Timeout
+	}
+
+	pollInterval := cfg.InitialInterval
+	if v, ok := arguments["poll_interval_seconds"].(float64); ok && v > 0 {
+		if candidate := secondsToDuration(v); candidate > 0 {
+			pollInterval = candidate
+		}
+	}
+	if pollInterval <= 0 {
+		pollInterval = defaultStatusPollConfig().InitialInterval
+	}
+
+	maxPoll := cfg.MaxInterval
+	if maxPoll <= 0 || maxPoll < pollInterval {
+		maxPoll = pollInterval
+	}
+	if v, ok := arguments["max_poll_interval_seconds"].(float64); ok && v > 0 {
+		if candidate := secondsToDuration(v); candidate >= pollInterval {
+			maxPoll = candidate
+		}
+	}
+
+	backoff := cfg.BackoffFactor
+	if backoff <= 1.0 {
+		backoff = defaultStatusPollConfig().BackoffFactor
+	}
+	if v, ok := arguments["poll_backoff_factor"].(float64); ok && v > 1.0 {
+		backoff = v
+	}
+
+	deadline := time.Now().Add(timeout)
+	sleep := pollInterval
+
+	logx.Infof("Checking status for branch %s (timeout=%.1fs)", branchID, timeout.Seconds())
 	for attempt := 1; ; attempt++ {
 		resp, err := h.client.GetBranch(branchID)
 		if err != nil {
@@ -348,7 +404,8 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 		logx.Infof("Branch %s still active (status=%s). Sleeping %.1fs.", branchID, status, sleep.Seconds())
 		time.Sleep(sleep)
 		// exponential-ish backoff
-		sleep = time.Duration(minFloat(float64(sleep/time.Second)*1.5, maxPoll)) * time.Second
+		nextSleep := minFloat(sleep.Seconds()*backoff, maxPoll.Seconds())
+		sleep = time.Duration(nextSleep * float64(time.Second))
 	}
 }
 
@@ -467,6 +524,33 @@ func minFloat(a, b float64) float64 {
 		return a
 	}
 	return b
+}
+
+func sanitizeStatusPollConfig(cfg StatusPollConfig) StatusPollConfig {
+	defaults := defaultStatusPollConfig()
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = defaults.Timeout
+	}
+	if cfg.InitialInterval <= 0 {
+		cfg.InitialInterval = defaults.InitialInterval
+	}
+	if cfg.MaxInterval <= 0 {
+		cfg.MaxInterval = defaults.MaxInterval
+	}
+	if cfg.MaxInterval < cfg.InitialInterval {
+		cfg.MaxInterval = cfg.InitialInterval
+	}
+	if cfg.BackoffFactor <= 1.0 {
+		cfg.BackoffFactor = defaults.BackoffFactor
+	}
+	return cfg
+}
+
+func secondsToDuration(sec float64) time.Duration {
+	if sec <= 0 {
+		return 0
+	}
+	return time.Duration(sec * float64(time.Second))
 }
 
 func isNotFoundError(err error) bool {
