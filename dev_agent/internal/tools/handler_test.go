@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
@@ -184,6 +185,30 @@ func TestReadArtifactHandlesErrorPayload(t *testing.T) {
 	}
 }
 
+func TestCheckStatusUsesHandlerTimeout(t *testing.T) {
+	handler := &ToolHandler{
+		client:        &timeoutFakeClient{},
+		branchTracker: NewBranchTracker("parent"),
+		statusTimeout: 50 * time.Millisecond,
+	}
+
+	_, err := handler.checkStatus(map[string]any{
+		"branch_id":                 "branch-timeout",
+		"poll_interval_seconds":     0.001,
+		"max_poll_interval_seconds": 0.001,
+	})
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	var te ToolExecutionError
+	if !errors.As(err, &te) {
+		t.Fatalf("expected ToolExecutionError, got %T", err)
+	}
+	if !strings.Contains(te.Msg, "Timed out") {
+		t.Fatalf("expected timeout message, got %q", te.Msg)
+	}
+}
+
 type branchReadInput struct {
 	branchID string
 	path     string
@@ -260,6 +285,28 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 		return map[string]any{"output": "ok"}, nil
 	}
 	return f.branchOutputResult, nil
+}
+
+type timeoutFakeClient struct{}
+
+func (t *timeoutFakeClient) ParallelExplore(projectName, parentBranchID string, prompts []string, agent string, numBranches int) (map[string]any, error) {
+	return nil, nil
+}
+
+func (t *timeoutFakeClient) GetBranch(branchID string) (map[string]any, error) {
+	return map[string]any{
+		"id":             branchID,
+		"status":         "running",
+		"latest_snap_id": fmt.Sprintf("snap-%s", branchID),
+	}, nil
+}
+
+func (t *timeoutFakeClient) BranchReadFile(branchID, filePath string) (map[string]any, error) {
+	return nil, nil
+}
+
+func (t *timeoutFakeClient) BranchOutput(branchID string, fullOutput bool) (map[string]any, error) {
+	return nil, nil
 }
 
 func notFoundErr(attempt int) error {

@@ -26,6 +26,7 @@ type AgentConfig struct {
 	GitHubToken       string
 	GitUserName       string
 	GitUserEmail      string
+	StatusTimeout     time.Duration
 }
 
 func FromEnv() (AgentConfig, error) {
@@ -83,6 +84,11 @@ func FromEnv() (AgentConfig, error) {
 		return AgentConfig{}, errors.New("MCP_POLL_TIMEOUT_SECONDS must be greater than MCP_POLL_MAX_SECONDS")
 	}
 
+	statusTimeout, err := envSeconds("DEV_AGENT_TIMEOUT_SECONDS", 1800)
+	if err != nil {
+		return AgentConfig{}, err
+	}
+
 	project := os.Getenv("PROJECT_NAME")
 	workspace := os.Getenv("WORKSPACE_DIR")
 	if workspace == "" {
@@ -128,6 +134,7 @@ func FromEnv() (AgentConfig, error) {
 		GitHubToken:       githubToken,
 		GitUserName:       gitUserName,
 		GitUserEmail:      gitUserEmail,
+		StatusTimeout:     statusTimeout,
 	}, nil
 }
 
