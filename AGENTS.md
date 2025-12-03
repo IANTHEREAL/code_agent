@@ -12,6 +12,7 @@
   - `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, optional `AZURE_OPENAI_API_VERSION`.
   - `MCP_BASE_URL` (defaults to `http://localhost:8000/mcp/sse`).
   - Polling control: `MCP_POLL_INITIAL_SECONDS`, `MCP_POLL_MAX_SECONDS`, `MCP_POLL_TIMEOUT_SECONDS`, `MCP_POLL_BACKOFF_FACTOR`.
+  - Branch status timeout: optional `AGENT_TIMEOUT_SECONDS` (defaults to 1800 seconds).
   - Workspace context: `PROJECT_NAME`, optional `WORKSPACE_DIR` (defaults `/home/pan/workspace`).
   - `GITHUB_TOKEN` for final branch publish.
 - Optional `.env` file at repo root is loaded first, non-destructively.

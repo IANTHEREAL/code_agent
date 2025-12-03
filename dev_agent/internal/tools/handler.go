@@ -4,7 +4,9 @@ import (
 	"dev_agent/internal/logx"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,10 +29,11 @@ type agentClient interface {
 var _ agentClient = (*MCPClient)(nil)
 
 const (
-	reviewCodeAgent            = "review_code"
-	reviewArtifactName         = "code_review.log"
-	reviewMaxAttempts          = 3
-	instructionFinishedWithErr = "FINISHED_WITH_ERROR"
+	reviewCodeAgent             = "review_code"
+	reviewArtifactName          = "code_review.log"
+	reviewMaxAttempts           = 3
+	instructionFinishedWithErr  = "FINISHED_WITH_ERROR"
+	defaultStatusTimeoutSeconds = 1800.0
 )
 
 type BranchTracker struct {
@@ -57,18 +60,20 @@ func (t *BranchTracker) Range() map[string]string {
 }
 
 type ToolHandler struct {
-	client        agentClient
-	defaultProj   string
-	branchTracker *BranchTracker
-	workspaceDir  string
+	client               agentClient
+	defaultProj          string
+	branchTracker        *BranchTracker
+	workspaceDir         string
+	statusTimeoutSeconds float64
 }
 
 func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
 	return &ToolHandler{
-		client:        client,
-		defaultProj:   defaultProject,
-		branchTracker: NewBranchTracker(startBranch),
-		workspaceDir:  strings.TrimSpace(workspaceDir),
+		client:               client,
+		defaultProj:          defaultProject,
+		branchTracker:        NewBranchTracker(startBranch),
+		workspaceDir:         strings.TrimSpace(workspaceDir),
+		statusTimeoutSeconds: loadStatusTimeoutSeconds(),
 	}
 }
 
@@ -260,12 +265,28 @@ func (h *ToolHandler) reviewLogPath() string {
 	return filepath.Join(h.workspaceDir, reviewArtifactName)
 }
 
+func loadStatusTimeoutSeconds() float64 {
+	val := strings.TrimSpace(os.Getenv("AGENT_TIMEOUT_SECONDS"))
+	if val == "" {
+		return defaultStatusTimeoutSeconds
+	}
+	seconds, err := strconv.ParseFloat(val, 64)
+	if err != nil || seconds <= 0 {
+		logx.Warningf("Invalid AGENT_TIMEOUT_SECONDS=%q, defaulting to %.0f seconds", val, defaultStatusTimeoutSeconds)
+		return defaultStatusTimeoutSeconds
+	}
+	return seconds
+}
+
 func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, error) {
 	branchID, _ := arguments["branch_id"].(string)
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
+	timeout := h.statusTimeoutSeconds
+	if timeout <= 0 {
+		timeout = defaultStatusTimeoutSeconds
+	}
 	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
 		timeout = v
 	}
