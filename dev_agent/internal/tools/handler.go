@@ -57,18 +57,24 @@ func (t *BranchTracker) Range() map[string]string {
 }
 
 type ToolHandler struct {
-	client        agentClient
-	defaultProj   string
-	branchTracker *BranchTracker
-	workspaceDir  string
+	client               agentClient
+	defaultProj          string
+	branchTracker        *BranchTracker
+	workspaceDir         string
+	statusTimeoutSeconds float64
 }
 
-func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
+func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string, statusTimeout time.Duration) *ToolHandler {
+	timeoutSeconds := statusTimeout.Seconds()
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 1800.0
+	}
 	return &ToolHandler{
-		client:        client,
-		defaultProj:   defaultProject,
-		branchTracker: NewBranchTracker(startBranch),
-		workspaceDir:  strings.TrimSpace(workspaceDir),
+		client:               client,
+		defaultProj:          defaultProject,
+		branchTracker:        NewBranchTracker(startBranch),
+		workspaceDir:         strings.TrimSpace(workspaceDir),
+		statusTimeoutSeconds: timeoutSeconds,
 	}
 }
 
@@ -265,7 +271,10 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
+	timeout := h.statusTimeoutSeconds
+	if timeout <= 0 {
+		timeout = 1800.0
+	}
 	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
 		timeout = v
 	}
