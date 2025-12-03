@@ -72,7 +72,7 @@ func FromEnv() (AgentConfig, error) {
 	if err != nil {
 		return AgentConfig{}, err
 	}
-	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 600)
+	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 1800)
 	if err != nil {
 		return AgentConfig{}, err
 	}
