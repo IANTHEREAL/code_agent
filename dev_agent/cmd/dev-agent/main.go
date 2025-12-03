@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	b "dev_agent/internal/brain"
@@ -17,11 +18,23 @@ import (
 )
 
 func main() {
+	defaultBranchTimeout := 1800.0
+	if envTimeout := strings.TrimSpace(os.Getenv("DEV_AGENT_TIMEOUT")); envTimeout != "" {
+		val, err := strconv.ParseFloat(envTimeout, 64)
+		if err != nil || val <= 0 {
+			fmt.Fprintf(os.Stderr, "DEV_AGENT_TIMEOUT must be a positive number of seconds (got %q)\n", envTimeout)
+			os.Exit(1)
+		}
+		defaultBranchTimeout = val
+	}
+
+	branchTimeoutHelp := fmt.Sprintf("Timeout in seconds for branch operations (default %.0f or DEV_AGENT_TIMEOUT)", defaultBranchTimeout)
 	task := flag.String("task", "", "User task description")
 	parent := flag.String("parent-branch-id", "", "Parent branch UUID (required)")
 	project := flag.String("project-name", "", "Optional project name override")
 	headless := flag.Bool("headless", false, "Run in headless mode (no chat prints)")
 	streamJSON := flag.Bool("stream-json", false, "Emit orchestration events as NDJSON to stdout (forces headless mode)")
+	branchTimeoutSeconds := flag.Float64("branch-timeout-seconds", defaultBranchTimeout, branchTimeoutHelp)
 	flag.Parse()
 
 	streamEnabled := streamJSON != nil && *streamJSON
@@ -66,7 +79,7 @@ func main() {
 
 	brain := b.NewLLMBrain(conf.AzureAPIKey, conf.AzureEndpoint, conf.AzureDeployment, conf.AzureAPIVersion, 3)
 	mcp := t.NewMCPClient(conf.MCPBaseURL)
-	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent, conf.WorkspaceDir)
+	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent, conf.WorkspaceDir, *branchTimeoutSeconds)
 
 	msgs := o.BuildInitialMessages(tsk, conf.ProjectName, conf.WorkspaceDir, *parent)
 	publish := o.PublishOptions{
