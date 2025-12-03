@@ -31,6 +31,7 @@ const (
 	reviewArtifactName         = "code_review.log"
 	reviewMaxAttempts          = 3
 	instructionFinishedWithErr = "FINISHED_WITH_ERROR"
+	defaultStatusTimeout       = 1800 * time.Second
 )
 
 type BranchTracker struct {
@@ -61,14 +62,19 @@ type ToolHandler struct {
 	defaultProj   string
 	branchTracker *BranchTracker
 	workspaceDir  string
+	statusTimeout time.Duration
 }
 
-func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
+func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string, statusTimeout time.Duration) *ToolHandler {
+	if statusTimeout <= 0 {
+		statusTimeout = defaultStatusTimeout
+	}
 	return &ToolHandler{
 		client:        client,
 		defaultProj:   defaultProject,
 		branchTracker: NewBranchTracker(startBranch),
 		workspaceDir:  strings.TrimSpace(workspaceDir),
+		statusTimeout: statusTimeout,
 	}
 }
 
@@ -265,7 +271,10 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
+	timeout := h.statusTimeout.Seconds()
+	if timeout <= 0 {
+		timeout = defaultStatusTimeout.Seconds()
+	}
 	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
 		timeout = v
 	}
