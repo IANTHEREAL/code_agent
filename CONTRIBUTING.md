@@ -26,7 +26,7 @@ Dev Agent is a Go 1.21 CLI (see `dev_agent/dev_agent/cmd/dev-agent`) that automa
 | `GITHUB_TOKEN` | Used when publishing branches from within the agent workflow |
 | `GIT_AUTHOR_NAME` / `GIT_AUTHOR_EMAIL` | Commit identity applied during automated publish steps |
 
-Additional knobs have sane defaults but can be overridden: `AZURE_OPENAI_API_VERSION`, `MCP_BASE_URL`, polling controls (`MCP_POLL_INITIAL_SECONDS`, `MCP_POLL_MAX_SECONDS`, `MCP_POLL_TIMEOUT_SECONDS`, `MCP_POLL_BACKOFF_FACTOR`), and workspace metadata (`PROJECT_NAME`, `WORKSPACE_DIR`). You can place these values in a `.env` file at the repo root; they are loaded before execution.
+Additional knobs have sane defaults but can be overridden: `AZURE_OPENAI_API_VERSION`, `MCP_BASE_URL`, polling controls (`MCP_POLL_INITIAL_SECONDS`, `MCP_POLL_MAX_SECONDS`, `MCP_POLL_TIMEOUT_SECONDS`, `MCP_POLL_BACKOFF_FACTOR`), and workspace metadata (`PROJECT_NAME`, `WORKSPACE_DIR`). Place these values in a `.env` file that lives in the same directory you run the CLI from—normally the module root `dev_agent/dev_agent`. `internal/config.FromEnv` only auto-loads `.env` from the current working directory, so running the binary from the repository root without copying the file will leave the CLI unconfigured.
 
 ## Development Environment Setup
 
@@ -52,7 +52,7 @@ Additional knobs have sane defaults but can be overridden: `AZURE_OPENAI_API_VER
    GIT_AUTHOR_EMAIL=you@example.com
    EOF
    ```
-   Add optional MCP and polling settings as needed.
+   Add optional MCP and polling settings as needed. If you run the CLI from another working directory (for example, a different workspace you `cd` into before `go run`), copy the `.env` file into that directory so `internal/config.FromEnv` can read it.
 4. **Install dependencies**: the project uses Go modules only; `go env GOPATH` is not required beyond a working Go toolchain.
 
 ## Building & Testing
@@ -64,6 +64,7 @@ go build ./...
 go test ./...
 ```
 
+- Ensure `.env` resides in your current working directory so `internal/config.FromEnv` sees it (the CLI is typically run from `dev_agent/dev_agent`).
 - `go build ./cmd/dev-agent` builds the CLI binary explicitly.
 - `go test ./...` should pass cleanly before you open a PR.
 - When validating feature work, also exercise `go run ./cmd/dev-agent --help` to ensure flags parse as expected.
