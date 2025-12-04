@@ -16,9 +16,9 @@ cd dev_agent
 ```
 
 ### Repository layout
-- `AGENTS.md`, `SKILL.md`, and top-level docs live at the repo root.
-- All Go sources, tests, and the CLI entrypoint live under the nested `dev_agent/` directory.
-- Design notes (for example, the `--stream-json` emitter) live under `dev_agent/docs/`.
+- `AGENTS.md`, `SKILL.md`, and top-level docs live at the repo root (`dev_agent/` once cloned).
+- All Go sources, tests, and the CLI entrypoint live under the nested `dev_agent/` directory (from the workspace root this path is `dev_agent/dev_agent/`).
+- Design notes (for example, the `--stream-json` emitter) live under `dev_agent/docs/` (workspace path `dev_agent/dev_agent/docs/`).
 
 ## Environment Setup
 ### Required environment variables
@@ -40,7 +40,7 @@ export GIT_AUTHOR_EMAIL="you@example.com"
 - `PROJECT_NAME` (used in reports) and `WORKSPACE_DIR` (defaults to `/home/pan/workspace`)
 
 ### Using a `.env` file
-The CLI automatically loads `.env` at the repo root (before reading the shell environment). Add key/value pairs (one per line) to avoid exporting secrets repeatedly:
+`internal/config.FromEnv` calls `loadDotenv(".env")`, so the CLI only loads a `.env` file that sits in the directory where you execute its commands. Because all build/run snippets below assume you work inside the Go module directory, place your `.env` next to that module’s `go.mod` (repo-relative `dev_agent/.env`, workspace-relative `dev_agent/dev_agent/.env`). If you run the CLI from another directory, set the variables manually or pass `--project-name` / flags explicitly. Add key/value pairs (one per line) to avoid exporting secrets repeatedly:
 ```
 AZURE_OPENAI_API_KEY=...
 PROJECT_NAME=my-repo
@@ -85,7 +85,7 @@ go run ./cmd/dev-agent \
   --task "Ship NDJSON streaming support"
 ```
 
-Enable NDJSON event streaming (documented in `dev_agent/docs/stream-json.md`) with:
+Enable NDJSON event streaming (documented in `dev_agent/docs/stream-json.md`, i.e., `dev_agent/dev_agent/docs/stream-json.md` from the workspace root) with:
 ```bash
 go run ./cmd/dev-agent \
   --parent-branch-id <uuid> \
@@ -97,7 +97,7 @@ go run ./cmd/dev-agent \
 ## Development Workflow
 - **Branching**: create feature branches from `main` (for example, `git checkout -b feat/contrib-docs`) and keep them short-lived.
 - **Tests first**: write or update Go tests to cover new behavior, especially inside `internal/` packages.
-- **Code organization**: CLI wiring lives in `cmd/dev-agent`, reusable logic in `internal/<package>`, and design docs in `dev_agent/docs/`.
+- **Code organization**: CLI wiring lives in `cmd/dev-agent`, reusable logic in `internal/<package>`, and design docs in `dev_agent/docs/` (workspace path `dev_agent/dev_agent/docs/`).
 - **Local validation**: run `go test ./...` (and integration commands, if applicable) before committing.
 - **Commit hygiene**: group related changes, write descriptive commit messages, and include issue numbers (e.g., `Resolves #37`) when relevant.
 
@@ -113,7 +113,7 @@ go run ./cmd/dev-agent \
 - **Linting**: use `golangci-lint` or `golint ./...` locally if available to catch common issues.
 - **Error handling**: prefer `%w` wrapping (`fmt.Errorf("fetch config: %w", err)`) and avoid dropping errors—log via `internal/logx` when side effects are required.
 - **Logging**: route CLI/runtime logs through `logx` to keep consistent formatting and headless friendliness.
-- **Docs & comments**: update `AGENTS.md`, `dev_agent/docs/*.md`, and function comments when behavior or configuration changes. Explain why non-obvious logic exists.
+- **Docs & comments**: update `AGENTS.md`, `dev_agent/docs/*.md` (workspace `dev_agent/dev_agent/docs/*.md`), and function comments when behavior or configuration changes. Explain why non-obvious logic exists.
 
 ## Getting Help
 - **Issues**: open a [GitHub issue](https://github.com/IANTHEREAL/dev_agent/issues) for bugs or feature requests. Tag maintainers and describe reproduction steps plus environment details.
@@ -121,6 +121,6 @@ go run ./cmd/dev-agent \
 - **Reference docs**: 
   - [AGENTS.md](AGENTS.md) – canonical Dev Agent specification
   - [SKILL.md](SKILL.md) – legacy TDD agent overview (contains historical Python references)
-  - [`dev_agent/docs/stream-json.md`](dev_agent/docs/stream-json.md) – NDJSON streaming emitter design
+  - [`dev_agent/docs/stream-json.md`](dev_agent/docs/stream-json.md) – NDJSON streaming emitter design (workspace path `dev_agent/dev_agent/docs/stream-json.md`)
 
 If you are blocked or unsure which document to update, ask in an issue before implementing large changes.
