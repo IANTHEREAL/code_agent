@@ -11,7 +11,7 @@ Thanks for helping improve the Dev Agent CLI. This project is a Go 1.21+ command
 - A GitHub personal access token (PAT) with `repo` scope so `dev-agent` can publish branches.
 
 ### Required environment variables
-`internal/config` enforces the following variables (load them via `export` or a `.env` file—`FromEnv` automatically reads `.env` in the repo root without overwriting existing shell values):
+`internal/config` enforces the following variables (load them via `export` or a `.env` file—`FromEnv` calls `loadDotenv(".env")` relative to your current working directory and only backfills unset variables, so keep `.env` wherever you run `go run`/`go test`, typically `dev_agent/dev_agent`):
 
 | Variable | Required? | Purpose |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ Thanks for helping improve the Dev Agent CLI. This project is a Go 1.21+ command
 | `GIT_AUTHOR_NAME` | ✓ | Commit author name applied by automation. |
 | `GIT_AUTHOR_EMAIL` | ✓ | Commit author email applied by automation. |
 
-> Tip: keep secrets out of shell history—populate `.env` and rely on `internal/config.loadDotenv` to import values.
+> Tip: keep secrets out of shell history—populate `.env` next to `go.mod` inside `dev_agent/dev_agent` (or export the vars) and rely on `internal/config.loadDotenv` to import values while you work from that directory.
 
 ## Repository layout and setup
 
@@ -38,6 +38,7 @@ This repository has a light-weight root plus a nested Go module:
 
 ```
 dev_agent/         # Go module root (<repo>/dev_agent)
+  .env             # local config (ignored); FromEnv finds it when you work here
   cmd/dev-agent    # CLI entry point
   internal/...     # config, orchestrator, tools, streaming, etc.
 AGENTS.md          # Architecture/system prompt reference
@@ -48,8 +49,8 @@ When cloning:
 
 ```bash
 git clone git@github.com:IANTHEREAL/dev_agent.git
-cd dev_agent              # repo root
-touch .env                # create (or update) a local env file
+cd dev_agent/dev_agent    # Go module root (where .env should live)
+touch .env                # create (or update) a local env file next to go.mod
 # edit .env with the variables listed above, or export them in your shell
 ```
 
@@ -74,6 +75,8 @@ go test ./...
 # Execute the CLI in headless mode with a sample task
 go run ./cmd/dev-agent --task "Demo task" --parent-branch-id <uuid>
 ```
+
+> `config.FromEnv` reads `.env` from your *current* working directory. Keep your `.env` beside `go.mod` (`dev_agent/dev_agent/.env`) and run Go commands from there, or export the variables in your shell before running commands elsewhere. Otherwise you'll hit errors like `AZURE_OPENAI_API_KEY must be set`.
 
 Add any new tests alongside your code—`internal/orchestrator`, `internal/tools`, and the streaming utilities all expect unit coverage before reviewers accept changes.
 
