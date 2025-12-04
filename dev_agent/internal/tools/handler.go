@@ -384,16 +384,7 @@ func ExtractBranchID(m map[string]any) string {
 	if m == nil {
 		return ""
 	}
-	for _, k := range []string{"branch_id", "id"} {
-		if v, ok := m[k].(string); ok && v != "" {
-			return v
-		}
-	}
-	if b, ok := m["branch"].(map[string]any); ok {
-		if id := ExtractBranchID(b); id != "" {
-			return id
-		}
-	}
+
 	if pe, ok := m["parallel_explore"].(map[string]any); ok {
 		if branches, ok := pe["branches"].([]any); ok {
 			for _, item := range branches {
@@ -412,6 +403,16 @@ func ExtractBranchID(m map[string]any) string {
 					return id
 				}
 			}
+		}
+	}
+	if b, ok := m["branch"].(map[string]any); ok {
+		if id := ExtractBranchID(b); id != "" {
+			return id
+		}
+	}
+	for _, k := range []string{"branch_id", "id"} {
+		if v, ok := m[k].(string); ok && v != "" {
+			return v
 		}
 	}
 	return ""
