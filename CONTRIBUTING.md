@@ -18,9 +18,10 @@
   3. `go env -w GO111MODULE=on` (optional on Go ≥1.21 but harmless)
   4. Install any tooling you rely on (e.g., `go install golang.org/x/tools/cmd/goimports@latest`).
 - **Environment configuration** (mirrors `AGENTS.md` / `SKILL.md`):
-  1. Copy `.env.example` if present, or create `.env` with at least `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, `MCP_BASE_URL`, `PROJECT_NAME`, and the GitHub token used for publish prompts.
-  2. Run `source .env` (or export variables directly) before invoking the CLI.
-  3. Use `WORKSPACE_DIR=/home/pan/workspace` to keep logs (`worklog.md`, `code_review.log`) consistent across agents.
+  1. Copy `.env.example` if present, or create `.env` with at least `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_BASE_URL`, `AZURE_OPENAI_DEPLOYMENT`, `MCP_BASE_URL`, `PROJECT_NAME`, the GitHub token used for publish prompts, plus the Git author identity variables `GIT_AUTHOR_NAME` and `GIT_AUTHOR_EMAIL`.
+  2. Set `GIT_AUTHOR_NAME` (e.g., `Jane Developer`) and `GIT_AUTHOR_EMAIL` (e.g., `jane@example.com`) to the values you want recorded in generated commits—`internal/config.FromEnv` refuses to run without them.
+  3. Run `source .env` (or export variables directly) before invoking the CLI.
+  4. Use `WORKSPACE_DIR=/home/pan/workspace` to keep logs (`worklog.md`, `code_review.log`) consistent across agents.
 
 ## Development Workflow
 1. **Start with an issue** – document intent, edge cases, and acceptance criteria in GitHub before touching code.
