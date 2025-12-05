@@ -24,10 +24,12 @@ The CLI loads a `.env` file at the repo root (if present) and then reads your sh
 | `MCP_POLL_INITIAL_SECONDS`, `MCP_POLL_MAX_SECONDS`, `MCP_POLL_TIMEOUT_SECONDS`, `MCP_POLL_BACKOFF_FACTOR` | Optional polling tunables (defaults enforce sane exponential backoff). |
 | `PROJECT_NAME` | Human-friendly project identifier surfaced in prompts/reports (required unless `--project-name` flag is provided). |
 | `WORKSPACE_DIR` | Workspace root (defaults to `/home/pan/workspace`). |
-| `GITHUB_TOKEN` | Token with permission to push branches from automated agents. |
-| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | Identity used when the agent commits/pushes. |
+| `GITHUB_TOKEN` | Token with permission to push branches when *you* (the human contributor) publish work. Automated agents never push or open PRs. |
+| `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL` | Identity used for human-authored commits/pushes that originate from your workstation. |
 
 > Tip: Keep secrets out of commits. Use `.env` locally and rely on deployment secrets for CI/CD.
+>
+> Note: Repository automation runs under locked-down credentials that only read state and stage work locally; pushing branches/PRs is an explicit human step.
 
 ---
 
