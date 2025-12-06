@@ -19,13 +19,8 @@ const (
 	commentConfirmed    = "confirmed"
 	commentUnresolved   = "unresolved"
 	defaultMaxExchanges = 2
+	defaultReviewRuns   = 3
 )
-
-var defaultReviewHints = []string{
-	"Start with functional correctness: inspect the PR diff for regressions, logic errors, or missing requirements.",
-	"Focus on error handling, concurrency, boundary conditions, and data validation paths.",
-	"Stress-test security, input sanitization, compatibility, and missing regression tests.",
-}
 
 // Options configures the PR review workflow.
 type Options struct {
@@ -33,7 +28,7 @@ type Options struct {
 	ProjectName     string
 	ParentBranchID  string
 	WorkspaceDir    string
-	ReviewHints     []string
+	ReviewRuns      int
 	MaxExchangeRuns int
 }
 
@@ -51,15 +46,15 @@ type Result struct {
 
 // ReviewerLog records the raw output from each review_code run.
 type ReviewerLog struct {
-	Hint     string `json:"hint"`
 	BranchID string `json:"branch_id"`
 	Report   string `json:"report"`
 }
 
 // Issue is a normalized ISSUE block extracted from the brain aggregation step.
 type Issue struct {
-	Name      string `json:"name"`
-	Statement string `json:"statement"`
+	Name      string   `json:"name"`
+	Statement string   `json:"statement"`
+	Branches  []string `json:"source_branches,omitempty"`
 }
 
 // Transcript records a codex agent's reasoning for an issue confirmation attempt.
@@ -88,6 +83,7 @@ type Runner struct {
 	opts     Options
 	streamer *streaming.JSONStreamer
 	events   *eventHelper
+	branch   string
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -111,8 +107,8 @@ func NewRunner(brain *b.LLMBrain, handler *t.ToolHandler, streamer *streaming.JS
 	if opts.ParentBranchID == "" {
 		return nil, errors.New("parent branch id is required")
 	}
-	if len(opts.ReviewHints) == 0 {
-		opts.ReviewHints = defaultReviewHints
+	if opts.ReviewRuns <= 0 {
+		opts.ReviewRuns = defaultReviewRuns
 	}
 	if opts.MaxExchangeRuns <= 0 {
 		opts.MaxExchangeRuns = defaultMaxExchanges
@@ -129,6 +125,9 @@ func NewRunner(brain *b.LLMBrain, handler *t.ToolHandler, streamer *streaming.JS
 // Run executes the workflow and returns the structured result.
 func (r *Runner) Run() (*Result, error) {
 	logx.Infof("Starting PR review workflow for parent %s", r.opts.ParentBranchID)
+	if err := r.prepareWorkspace(); err != nil {
+		return nil, err
+	}
 	reviewerLogs, err := r.runFanOut()
 	if err != nil {
 		return nil, err
@@ -185,8 +184,8 @@ func (r *Runner) attachBranchRange(res *Result) {
 
 func (r *Runner) runFanOut() ([]ReviewerLog, error) {
 	var logs []ReviewerLog
-	for i, hint := range r.opts.ReviewHints {
-		prompt := buildReviewPrompt(r.opts.Task, hint, i+1, len(r.opts.ReviewHints))
+	for i := 0; i < r.opts.ReviewRuns; i++ {
+		prompt := buildReviewPrompt(r.opts.Task, r.branch)
 		data, err := r.executeAgent("review_code", prompt)
 		if err != nil {
 			return nil, err
@@ -197,7 +196,6 @@ func (r *Runner) runFanOut() ([]ReviewerLog, error) {
 			return nil, fmt.Errorf("review_code run %d did not include code_review.log contents", i+1)
 		}
 		logs = append(logs, ReviewerLog{
-			Hint:     hint,
 			BranchID: branchID,
 			Report:   reviewLog,
 		})
@@ -211,7 +209,7 @@ func (r *Runner) aggregateIssues(logs []ReviewerLog) ([]Issue, string, error) {
 	}
 	userPrompt := buildAggregationPrompt(logs)
 	resp, err := r.brain.Complete([]b.ChatMessage{
-		{Role: "system", Content: "You aggregate raw P0/P1 review logs into concise ISSUE blocks. Output strictly in ISSUE n: ... format or state 'No P0/P1 issues found.' if empty."},
+		{Role: "system", Content: "You aggregate raw P0/P1 review logs into structured JSON arrays. Respond ONLY with JSON as instructed."},
 		{Role: "user", Content: userPrompt},
 	}, nil)
 	if err != nil {
@@ -221,7 +219,10 @@ func (r *Runner) aggregateIssues(logs []ReviewerLog) ([]Issue, string, error) {
 	if content == "" {
 		return nil, "", errors.New("aggregation brain call returned empty response")
 	}
-	issues := parseIssueBlocks(content)
+	issues, err := parseIssueBlocks(content)
+	if err != nil {
+		return nil, content, err
+	}
 	return issues, content, nil
 }
 
@@ -299,6 +300,19 @@ func (r *Runner) executeAgent(agent, prompt string) (map[string]any, error) {
 		"parent_branch_id": r.opts.ParentBranchID,
 	}
 	return r.callTool("execute_agent", args)
+}
+
+func (r *Runner) prepareWorkspace() error {
+	data, err := r.executeAgent("codex", buildPreparationPrompt(r.opts.Task))
+	if err != nil {
+		return err
+	}
+	summary, err := parsePreparationSummary(stringField(data, "response"))
+	if err != nil {
+		return err
+	}
+	r.branch = summary.Branch
+	return nil
 }
 
 func (r *Runner) callTool(name string, args map[string]any) (map[string]any, error) {

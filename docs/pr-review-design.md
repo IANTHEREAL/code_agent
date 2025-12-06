@@ -13,35 +13,49 @@ KISS version of the PR-review workflow that leans on the brain LLM for all text 
 
 ```
 Phase 1: Issue Discovery Fan-Out        Phase 2: Confirmation & Comments
- ├─ run review_code (hint #1)            For each aggregated issue:
- ├─ run review_code (hint #2)              ├─ run codex-alpha (Round 1)
- └─ run review_code (hint #3)              ├─ run codex-beta  (Round 1)
+ ├─ run review_code (pass #1)            For each aggregated issue:
+ ├─ run review_code (pass #2)              ├─ run codex-alpha (Round 1)
+ └─ run review_code (pass #3)              ├─ run codex-beta  (Round 1)
        ↓ raw code_review.log text          ├─ consensus check via brain
  Aggregate + dedupe via brain              ├─ if needed, exchange transcripts
        ↓ canonical issue list              ├─ consensus re-check
  If empty → exit clean                      └─ format PR comment / unresolved note
 ```
 
+## Pre-flight – Workspace Preparation
+
+Before launching any `review_code` runs, Codex performs a single preparation step on the current parent branch:
+
+1. Run `gh review <pr-url>` to fetch the PR metadata and discover the source branch/commit that must be reviewed.
+2. Check out that branch locally (reusing the cloned workspace inherited from the parent branch) so every subsequent child branch starts from the exact PR state.
+3. Exit after confirming the checkout succeeded; this branch is now ready for read-only review operations.
+
+Because each child branch clones the parent workspace, this one-time Codex step guarantees that all reviewers observe the same PR checkout without needing redundant git setup instructions in their prompts. Codex returns the exact local branch name after the checkout; subsequent review_code prompts reference that branch so reviewers know which local ref already contains the PR diff.
+
 ## Phase 1 – Issue Discovery Fan-Out
 
-1. Launch three `execute_agent` calls with `agent=review_code`. Each prompt uses the same PR context, ask for P0/P1 issues using critical reasoning.
+1. Launch three `execute_agent` calls with `agent=review_code`. Each prompt only contains the PR link / task text plus the prepared local branch name (no extra focus hints); `review_code` already carries a tuned system prompt that handles the detailed guidance.
 2. After each branch finishes, read `<workspace>/code_review.log` directly from that branch. The file contents stay untouched; keep them in memory alongside the producing branch ID for traceability.
-3. Ask the brain LLM (one completion) to consolidate the three raw logs:
-   ```
-  You are aggregating P0/P1 code review reports. Here are the raw logs from three reviewers:
-   ---
-   [Issue A]
-   ---
-   [Issue B]
-   ---
-   [Issue C]
-   ---
-   Produce a concise deduplicated list of P0/P1 issues. Format:
-   ```
-   ISSUE 1: orignal issue statement from review_code
-   ISSUE 2: orignal issue statement from review_code 
-   ...
-   ```
+3. Ask the brain LLM (one completion) to consolidate the three raw logs into structured JSON:
+  ```
+ You are aggregating P0/P1 code review reports. Here are the raw logs from three reviewers:
+  ---
+  [Issue A]
+  ---
+  [Issue B]
+  ---
+  [Issue C]
+  ---
+  Deduplicate overlapping issues and respond ONLY JSON matching:
+  [
+    {
+      "name": "ISSUE 1",
+      "statement": "concise canonical description",
+      "source_branches": ["branch-id-a", "branch-id-b"]
+    }
+  ]
+  Return [] if no blocking issues remain.
+  ```
 
 4. Exit conditions:
    - If the LLM states “No P0/P1 issues” (or emits no `ISSUE` blocks), stop and report success (“clean PR”).
