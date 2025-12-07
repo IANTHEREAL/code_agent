@@ -9,129 +9,58 @@ KISS version of the PR-review workflow that leans on the brain LLM for all text 
 - Let the codex agents exchange reasoning/test plans until they either agree or document that they disagree.
 - Keep the workflow simple and deterministic so `dev-agent` can stop cleanly.
 
-## High-Level Flow
+## High-Level Flow (branch-per-issue)
 
 ```
-Phase 1: Issue Discovery Fan-Out        Phase 2: Confirmation & Comments
- ├─ run review_code (pass #1)            For each aggregated issue:
- ├─ run review_code (pass #2)              ├─ run codex-alpha (Round 1)
- └─ run review_code (pass #3)              ├─ run codex-beta  (Round 1)
-       ↓ raw code_review.log text          ├─ consensus check via brain
- Aggregate + dedupe via brain              ├─ if needed, exchange transcripts
-       ↓ canonical issue list              ├─ consensus re-check
- If empty → exit clean                      └─ format PR comment / unresolved note
+Per branch:
+ ├─ run review_code once to find the top P0/P1 issue
+ ├─ run codex-alpha and codex-beta to verify
+ ├─ if disagreement, one short exchange round
+ └─ emit confirmed / unresolved with transcripts
 ```
 
-## Pre-flight – Workspace Preparation
+## Branch Setup
 
-Before launching any `review_code` runs, Codex performs a single preparation step on the current parent branch:
+- No special pre-flight step. Each branch inherits the parent workspace state; the agent does not run `gh review` or check out refs. All prompts contain only the PR/task text.
 
-1. Run `gh review <pr-url>` to fetch the PR metadata and discover the source branch/commit that must be reviewed.
-2. Check out that branch locally (reusing the cloned workspace inherited from the parent branch) so every subsequent child branch starts from the exact PR state.
-3. Exit after confirming the checkout succeeded; this branch is now ready for read-only review operations.
+## Phase 1 – Single-Issue Discovery
 
-Because each child branch clones the parent workspace, this one-time Codex step guarantees that all reviewers observe the same PR checkout without needing redundant git setup instructions in their prompts. Codex returns the exact local branch name after the checkout; subsequent review_code prompts reference that branch so reviewers know which local ref already contains the PR diff.
+1. Run `execute_agent` with `agent=review_code` and the PR/task text.
+2. Read `<workspace>/code_review.log` from that branch.
+3. Treat the log content as the single candidate issue for verification. If the log is empty, exit clean.
 
-## Phase 1 – Issue Discovery Fan-Out
+## Phase 2 – Confirmation (per issue)
 
-1. Launch three `execute_agent` calls with `agent=review_code`. Each prompt only contains the PR link / task text plus the prepared local branch name (no extra focus hints); `review_code` already carries a tuned system prompt that handles the detailed guidance.
-2. After each branch finishes, read `<workspace>/code_review.log` directly from that branch. The file contents stay untouched; keep them in memory alongside the producing branch ID for traceability.
-3. Ask the brain LLM (one completion) to consolidate the three raw logs into structured JSON:
-  ```
- You are aggregating P0/P1 code review reports. Here are the raw logs from three reviewers:
-  ---
-  [Issue A]
-  ---
-  [Issue B]
-  ---
-  [Issue C]
-  ---
-  Deduplicate overlapping issues and respond ONLY JSON matching:
-  [
-    {
-      "name": "ISSUE 1",
-      "statement": "concise canonical description",
-      "source_branches": ["branch-id-a", "branch-id-b"]
-    }
-  ]
-  Return [] if no blocking issues remain.
-  ```
-
-4. Exit conditions:
-   - If the LLM states “No P0/P1 issues” (or emits no `ISSUE` blocks), stop and report success (“clean PR”).
-   - Otherwise continue with Phase 2.
-
-## Phase 2 – Confirmation & Discussion
-
-For each `ISSUE n:` block:
-
-1. **Round 1 confirmations**
-   - Run `codex-alpha` and `codex-beta` via `execute_agent`. Each prompt ask to read the PR diff, and the exact issue text block.They must reason about the defect, explain how to reproduce it locally, and propose a minimal failing test. Each agent replies in free-form text; we store the branch ID and full transcript.
-2. **Consensus check**
-   - Ask the brain LLM to compare transcripts:
-     ```
-     Transcript A: ...
-     Transcript B: ...
-    Do these describe the same defect and failing test? Reply JSON:
-    {"agree":true/false,"explanation":"..."}
-     ```
-   - If `agree=true`, mark the issue as confirmed and skip to comment drafting.
-3. **Exchange round**
-   - If `agree=false`, send each agent the other’s transcript and ask them to
-     either adopt the peer’s failing test, refine their own test, or explicitly
-     withdraw the issue if convinced it is invalid. This is one extra
-     `execute_agent` call per agent.
-   - Run the same consensus check again on the new transcripts.
-4. **Verdict handling**
-   - Both agree → confirmed by both agents.
-   - Neither agent can agree → re-enter the exchange round. The orchestrator keeps
-     looping through “exchange → consensus check” until they agree or a small
-     max-attempt threshold (e.g., two exchanges) is reached. Remaining
-     disagreements after the cap are labeled “unresolved” with both transcripts
-     attached.
-
-5. **Comment drafting**
-   - For confirmed issues, ask the brain LLM to produce the final GitHub-ready comment:
-     ```
-     Write a PR review comment summarizing this issue and the failing test. 
-     {original issue log}
-     {confirmed transcripts}
-     ```
-   - The orchestrator records `{status, comment_markdown, supporting_transcripts}`
-     for each issue (status ∈ {confirmed, unresolved}).
+1. Run `codex-alpha` and `codex-beta` via `execute_agent` on the same issue.
+   - Prompts ask them to inspect the repo/PR diff, describe reproduction, and propose a minimal failing test.
+2. Consensus check via brain:
+   ```
+   {"agree":true/false,"explanation":"..."}
+   ```
+3. If they disagree, run **one** exchange round: each agent sees the peer transcript and updates their verdict/test.
+4. Final verdict: `confirmed` if agree, otherwise `unresolved`, recording both transcripts and the explanation.
 
 ## Completion & Exit Conditions
 
-- If Phase 1 yields no issues → exit immediately with status `clean`, note that
-  three `review_code` runs found nothing.
-- Otherwise, collect all `confirmed` and `unresolved` entries into the final report. Provide the Markdown comments plus references to the branch IDs/transcripts in case humans need deeper context.
-- The orchestrator enforces a small maximum number of exchange rounds per issue to preserve a guaranteed exit condition.
+- If Phase 1 yields no issue → status `clean`, summary notes that review_code reported no blocking issues.
+- Otherwise return a single issue report with status `confirmed` or `unresolved`, plus transcripts and branch IDs for traceability.
 
 ## Pseudocode Sketch
 
 ```pseudo
 function run_pr_review(ctx):
-    logs = parallel_map(seed in HINTS, collect_review_log(seed, ctx))
-    issues = aggregate_issues_with_brain(logs)
-    if issues.empty():
-        return {status:"clean", comments:[]}
+    log = run_review_code(ctx.task)
+    issue = pick_top_issue(log)
+    if issue is none: return {status:"clean"}
 
-    comments = []
-    for issue in issues:
-        transcripts = [
-            run_codex("codex-alpha", issue, ctx, nil),
-            run_codex("codex-beta", issue, ctx, nil),
-        ]
-        verdict = consensus_check(transcripts)
-        if !verdict.agree:
-            transcripts = [
-                run_codex("codex-alpha", issue, ctx, transcripts[1]),
-                run_codex("codex-beta", issue, ctx, transcripts[0]),
-            ]
-            verdict = consensus_check(transcripts)
-        comments.append(format_comment(issue, transcripts, verdict))
-
-    return summarize(comments)
+    alpha = run_codex("codex-alpha", issue)
+    beta = run_codex("codex-beta", issue)
+    verdict = consensus_check(issue, alpha, beta)
+    if !verdict.agree:
+        alpha = run_codex("codex-alpha", issue, peer=beta)
+        beta = run_codex("codex-beta", issue, peer=alpha)
+        verdict = consensus_check(issue, alpha, beta)
+    return summarize(issue, verdict, alpha, beta)
 ```
 
-Every “magic” step (`aggregate_issues_with_brain`, `consensus_check`, `format_comment`) is a single `brain.complete` call that ingests raw text and outputs either structured JSON or Markdown, keeping the orchestrator small and easy to maintain.
+Each “magic” step (`pick_top_issue`, `consensus_check`) is a single `brain.complete` call that ingests raw text and outputs structured JSON, keeping the orchestrator small and deterministic.

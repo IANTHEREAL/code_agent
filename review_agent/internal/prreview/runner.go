@@ -18,8 +18,7 @@ const (
 	statusIssues        = "issues_found"
 	commentConfirmed    = "confirmed"
 	commentUnresolved   = "unresolved"
-	defaultMaxExchanges = 2
-	defaultReviewRuns   = 3
+	defaultMaxExchanges = 1
 )
 
 // Options configures the PR review workflow.
@@ -28,33 +27,24 @@ type Options struct {
 	ProjectName     string
 	ParentBranchID  string
 	WorkspaceDir    string
-	ReviewRuns      int
 	MaxExchangeRuns int
 }
 
 // Result captures the high-level outcome plus supporting artifacts.
 type Result struct {
-	Task             string        `json:"task"`
-	Status           string        `json:"status"`
-	Summary          string        `json:"summary"`
-	ReviewerLogs     []ReviewerLog `json:"reviewer_logs"`
-	AggregatedIssues string        `json:"aggregated_issues,omitempty"`
-	Issues           []IssueReport `json:"issues"`
-	StartBranchID    string        `json:"start_branch_id,omitempty"`
-	LatestBranchID   string        `json:"latest_branch_id,omitempty"`
+	Task           string        `json:"task"`
+	Status         string        `json:"status"`
+	Summary        string        `json:"summary"`
+	ReviewerLogs   []ReviewerLog `json:"reviewer_logs"`
+	Issues         []IssueReport `json:"issues"`
+	StartBranchID  string        `json:"start_branch_id,omitempty"`
+	LatestBranchID string        `json:"latest_branch_id,omitempty"`
 }
 
 // ReviewerLog records the raw output from each review_code run.
 type ReviewerLog struct {
 	BranchID string `json:"branch_id"`
 	Report   string `json:"report"`
-}
-
-// Issue is a normalized ISSUE block extracted from the brain aggregation step.
-type Issue struct {
-	Name      string   `json:"name"`
-	Statement string   `json:"statement"`
-	Branches  []string `json:"source_branches,omitempty"`
 }
 
 // Transcript records a codex agent's reasoning for an issue confirmation attempt.
@@ -67,9 +57,8 @@ type Transcript struct {
 
 // IssueReport stores the consensus outcome for a single ISSUE block.
 type IssueReport struct {
-	Issue              Issue      `json:"issue"`
+	IssueText          string     `json:"issue_text"`
 	Status             string     `json:"status"`
-	Comment            string     `json:"comment_markdown,omitempty"`
 	Alpha              Transcript `json:"alpha"`
 	Beta               Transcript `json:"beta"`
 	ExchangeRounds     int        `json:"exchange_rounds"`
@@ -83,7 +72,6 @@ type Runner struct {
 	opts     Options
 	streamer *streaming.JSONStreamer
 	events   *eventHelper
-	branch   string
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -107,9 +95,6 @@ func NewRunner(brain *b.LLMBrain, handler *t.ToolHandler, streamer *streaming.JS
 	if opts.ParentBranchID == "" {
 		return nil, errors.New("parent branch id is required")
 	}
-	if opts.ReviewRuns <= 0 {
-		opts.ReviewRuns = defaultReviewRuns
-	}
 	if opts.MaxExchangeRuns <= 0 {
 		opts.MaxExchangeRuns = defaultMaxExchanges
 	}
@@ -125,43 +110,33 @@ func NewRunner(brain *b.LLMBrain, handler *t.ToolHandler, streamer *streaming.JS
 // Run executes the workflow and returns the structured result.
 func (r *Runner) Run() (*Result, error) {
 	logx.Infof("Starting PR review workflow for parent %s", r.opts.ParentBranchID)
-	if err := r.prepareWorkspace(); err != nil {
-		return nil, err
-	}
-	reviewerLogs, err := r.runFanOut()
+	reviewLog, err := r.runSingleReview()
 	if err != nil {
 		return nil, err
 	}
 
 	result := &Result{
 		Task:         r.opts.Task,
-		ReviewerLogs: reviewerLogs,
+		ReviewerLogs: []ReviewerLog{reviewLog},
 		Issues:       []IssueReport{},
 	}
 
-	issues, aggregated, err := r.aggregateIssues(reviewerLogs)
-	if err != nil {
-		return nil, err
-	}
-	result.AggregatedIssues = aggregated
-
-	if len(issues) == 0 {
+	if strings.TrimSpace(reviewLog.Report) == "" {
 		result.Status = statusClean
-		result.Summary = "Clean PR: fan-out review runs reported no P0/P1 issues."
+		result.Summary = "Clean PR: review_code reported no blocking P0/P1 issue."
 		r.attachBranchRange(result)
 		return result, nil
 	}
 
-	for _, issue := range issues {
-		report, err := r.confirmIssue(issue)
-		if err != nil {
-			return nil, err
-		}
-		result.Issues = append(result.Issues, report)
+	issueText := reviewLog.Report
+	report, err := r.confirmIssue(issueText)
+	if err != nil {
+		return nil, err
 	}
+	result.Issues = append(result.Issues, report)
 	confirmed, unresolved := summarizeIssueCounts(result.Issues)
 	result.Status = statusIssues
-	result.Summary = fmt.Sprintf("Identified %d P0/P1 issues (%d confirmed, %d unresolved).", len(result.Issues), confirmed, unresolved)
+	result.Summary = fmt.Sprintf("Identified %d P0/P1 issue (%d confirmed, %d unresolved).", len(result.Issues), confirmed, unresolved)
 	r.attachBranchRange(result)
 	return result, nil
 }
@@ -182,61 +157,34 @@ func (r *Runner) attachBranchRange(res *Result) {
 	}
 }
 
-func (r *Runner) runFanOut() ([]ReviewerLog, error) {
-	var logs []ReviewerLog
-	for i := 0; i < r.opts.ReviewRuns; i++ {
-		prompt := buildReviewPrompt(r.opts.Task, r.branch)
-		data, err := r.executeAgent("review_code", prompt)
-		if err != nil {
-			return nil, err
-		}
-		branchID := stringField(data, "branch_id")
-		reviewLog := strings.TrimSpace(stringField(data, "review_report"))
-		if reviewLog == "" {
-			return nil, fmt.Errorf("review_code run %d did not include code_review.log contents", i+1)
-		}
-		logs = append(logs, ReviewerLog{
-			BranchID: branchID,
-			Report:   reviewLog,
-		})
+func (r *Runner) runSingleReview() (ReviewerLog, error) {
+	prompt := buildReviewPrompt(r.opts.Task)
+	data, err := r.executeAgent("review_code", prompt)
+	if err != nil {
+		return ReviewerLog{}, err
 	}
-	return logs, nil
+	branchID := stringField(data, "branch_id")
+	reviewLog := strings.TrimSpace(stringField(data, "review_report"))
+	if reviewLog == "" {
+		return ReviewerLog{}, fmt.Errorf("review_code did not include code_review.log contents")
+	}
+	return ReviewerLog{
+		BranchID: branchID,
+		Report:   reviewLog,
+	}, nil
 }
 
-func (r *Runner) aggregateIssues(logs []ReviewerLog) ([]Issue, string, error) {
-	if len(logs) == 0 {
-		return nil, "", nil
-	}
-	userPrompt := buildAggregationPrompt(logs)
-	resp, err := r.brain.Complete([]b.ChatMessage{
-		{Role: "system", Content: "You aggregate raw P0/P1 review logs into structured JSON arrays. Respond ONLY with JSON as instructed."},
-		{Role: "user", Content: userPrompt},
-	}, nil)
-	if err != nil {
-		return nil, "", err
-	}
-	content := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if content == "" {
-		return nil, "", errors.New("aggregation brain call returned empty response")
-	}
-	issues, err := parseIssueBlocks(content)
-	if err != nil {
-		return nil, content, err
-	}
-	return issues, content, nil
-}
-
-func (r *Runner) confirmIssue(issue Issue) (IssueReport, error) {
-	alpha, err := r.runCodex("codex-alpha", issue, "", 1)
+func (r *Runner) confirmIssue(issueText string) (IssueReport, error) {
+	alpha, err := r.runCodex("codex-alpha", issueText, "", 1)
 	if err != nil {
 		return IssueReport{}, err
 	}
-	beta, err := r.runCodex("codex-beta", issue, "", 1)
+	beta, err := r.runCodex("codex-beta", issueText, "", 1)
 	if err != nil {
 		return IssueReport{}, err
 	}
 
-	verdict, err := r.checkConsensus(issue, alpha, beta)
+	verdict, err := r.checkConsensus(issueText, alpha, beta)
 	if err != nil {
 		return IssueReport{}, err
 	}
@@ -244,22 +192,22 @@ func (r *Runner) confirmIssue(issue Issue) (IssueReport, error) {
 	exchanges := 0
 	for !verdict.Agree && exchanges < r.opts.MaxExchangeRuns {
 		exchanges++
-		alpha, err = r.runCodex("codex-alpha", issue, beta.Text, alpha.Round+1)
+		alpha, err = r.runCodex("codex-alpha", issueText, beta.Text, alpha.Round+1)
 		if err != nil {
 			return IssueReport{}, err
 		}
-		beta, err = r.runCodex("codex-beta", issue, alpha.Text, beta.Round+1)
+		beta, err = r.runCodex("codex-beta", issueText, alpha.Text, beta.Round+1)
 		if err != nil {
 			return IssueReport{}, err
 		}
-		verdict, err = r.checkConsensus(issue, alpha, beta)
+		verdict, err = r.checkConsensus(issueText, alpha, beta)
 		if err != nil {
 			return IssueReport{}, err
 		}
 	}
 
 	report := IssueReport{
-		Issue:              issue,
+		IssueText:          issueText,
 		Alpha:              alpha,
 		Beta:               beta,
 		ExchangeRounds:     exchanges,
@@ -267,19 +215,14 @@ func (r *Runner) confirmIssue(issue Issue) (IssueReport, error) {
 	}
 	if verdict.Agree {
 		report.Status = commentConfirmed
-		comment, err := r.draftComment(issue, alpha, beta)
-		if err != nil {
-			return IssueReport{}, err
-		}
-		report.Comment = comment
 	} else {
 		report.Status = commentUnresolved
 	}
 	return report, nil
 }
 
-func (r *Runner) runCodex(label string, issue Issue, peerTranscript string, round int) (Transcript, error) {
-	prompt := buildCodexPrompt(label, r.opts.Task, issue, peerTranscript, round)
+func (r *Runner) runCodex(label string, issueText string, peerTranscript string, round int) (Transcript, error) {
+	prompt := buildCodexPrompt(label, r.opts.Task, issueText, peerTranscript, round)
 	data, err := r.executeAgent("codex", prompt)
 	if err != nil {
 		return Transcript{}, err
@@ -300,19 +243,6 @@ func (r *Runner) executeAgent(agent, prompt string) (map[string]any, error) {
 		"parent_branch_id": r.opts.ParentBranchID,
 	}
 	return r.callTool("execute_agent", args)
-}
-
-func (r *Runner) prepareWorkspace() error {
-	data, err := r.executeAgent("codex", buildPreparationPrompt(r.opts.Task))
-	if err != nil {
-		return err
-	}
-	summary, err := parsePreparationSummary(stringField(data, "response"))
-	if err != nil {
-		return err
-	}
-	r.branch = summary.Branch
-	return nil
 }
 
 func (r *Runner) callTool(name string, args map[string]any) (map[string]any, error) {
@@ -352,8 +282,8 @@ func (r *Runner) callTool(name string, args map[string]any) (map[string]any, err
 	return data, nil
 }
 
-func (r *Runner) checkConsensus(issue Issue, alpha Transcript, beta Transcript) (consensusVerdict, error) {
-	prompt := buildConsensusPrompt(issue, alpha, beta)
+func (r *Runner) checkConsensus(issueText string, alpha Transcript, beta Transcript) (consensusVerdict, error) {
+	prompt := buildConsensusPrompt(issueText, alpha, beta)
 	resp, err := r.brain.Complete([]b.ChatMessage{
 		{Role: "system", Content: "Return JSON verdicts comparing codex transcripts. Always reply as JSON."},
 		{Role: "user", Content: prompt},
@@ -362,22 +292,6 @@ func (r *Runner) checkConsensus(issue Issue, alpha Transcript, beta Transcript) 
 		return consensusVerdict{}, err
 	}
 	return parseConsensus(resp.Choices[0].Message.Content)
-}
-
-func (r *Runner) draftComment(issue Issue, alpha Transcript, beta Transcript) (string, error) {
-	prompt := buildCommentPrompt(issue, alpha, beta)
-	resp, err := r.brain.Complete([]b.ChatMessage{
-		{Role: "system", Content: "Write concise GitHub PR review comments describing confirmed defects."},
-		{Role: "user", Content: prompt},
-	}, nil)
-	if err != nil {
-		return "", err
-	}
-	comment := strings.TrimSpace(resp.Choices[0].Message.Content)
-	if comment == "" {
-		return "", errors.New("comment drafting returned empty response")
-	}
-	return comment, nil
 }
 
 type eventHelper struct {
