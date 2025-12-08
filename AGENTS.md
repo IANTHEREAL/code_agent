@@ -1,6 +1,6 @@
 # Agent Codex: The Builder & The Critic
 
-`dev_agent` orchestrates work through two single-turn specialists—**Codex** (builder) and **review_code** (critic)—to enforce an auditable TDD loop. Every turn produces a new Pantheon branch, so branch lineage is strictly linear and each agent receives a complete prompt (task, phase goals, context).
+`dev_agent` orchestrates work through two single-turn specialists— **Codex** or **Claude Code** (builder) and **review_code** (critic)—to enforce an auditable TDD loop. Every turn produces a new Pantheon branch, so branch lineage is strictly linear and each agent receives a complete prompt (task, phase goals, context).
 
 ## Workflow Reference
 - **Turn order**: Codex (implement) → review_code → Codex (fix) → … until review_code reports success. The orchestrator stops after 8 review cycles or when the critic signs off.
@@ -36,7 +36,7 @@
 ## Reviewer (The Critic)
 **Role**: QA-focused reviewer that validates the latest branch.
 
-- Operates read-only on the branch produced by Codex.
+- Operates on the branch produced by Codex.
 - Reviews only the new work; legacy issues are ignored unless the change regresses them.
 - Logs each P0/P1 issue to `code_review.log` with enough reproduction detail for Codex to act. When no blocking issues remain, write “No P0/P1 issues found” so the orchestrator can exit the loop.
 - The orchestrator retries up to three times to collect `code_review.log`; missing logs stop the workflow with an explicit instruction to the user.

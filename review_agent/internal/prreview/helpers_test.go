@@ -25,8 +25,9 @@ func TestBuildVerifierPromptContainsLinusDirectives(t *testing.T) {
 		"Chesterton's Fence",
 		"Safety First",
 		"Architectural Intent",
-		"Reproduction Summary",
-		"core test snippet",
+		"Root Cause Analysis",
+		"CRITICAL MINDSET",
+		"EVIDENCE FABRICATION WARNING",
 	}
 	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
