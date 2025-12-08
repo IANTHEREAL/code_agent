@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
@@ -184,6 +185,92 @@ func TestReadArtifactHandlesErrorPayload(t *testing.T) {
 	}
 }
 
+func TestCheckStatusUsesConfiguredPollingDefaults(t *testing.T) {
+	client := &fakeMCPClient{
+		getBranchResults: []branchStatusResult{
+			{resp: map[string]any{"id": "branch-123", "status": "running"}},
+			{resp: map[string]any{"id": "branch-123", "status": "running"}},
+			{resp: map[string]any{"id": "branch-123", "status": "running"}},
+			{resp: map[string]any{"id": "branch-123", "status": "succeed"}},
+		},
+	}
+	clock := &fakeClock{}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+		pollInitial:   2 * time.Second,
+		pollMax:       5 * time.Second,
+		pollTimeout:   20 * time.Second,
+		pollBackoff:   2.0,
+		nowFunc:       clock.Now,
+		sleepFunc:     clock.Sleep,
+	}
+
+	res, err := handler.checkStatus(map[string]any{"branch_id": "branch-123"})
+	if err != nil {
+		t.Fatalf("checkStatus returned error: %v", err)
+	}
+	if status := stringsLower(res["status"]); status != "succeed" {
+		t.Fatalf("expected succeed status, got %#v", res["status"])
+	}
+
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 5 * time.Second}
+	if len(clock.sleeps) != len(want) {
+		t.Fatalf("expected %d sleep intervals, got %d (%v)", len(want), len(clock.sleeps), clock.sleeps)
+	}
+	for i, d := range want {
+		if clock.sleeps[i] != d {
+			t.Fatalf("sleep[%d]=%s, want %s; recorded sleeps=%v", i, clock.sleeps[i], d, clock.sleeps)
+		}
+	}
+}
+
+func TestCheckStatusTimeoutUsesConfiguredDefaults(t *testing.T) {
+	responses := make([]branchStatusResult, 8)
+	for i := range responses {
+		responses[i] = branchStatusResult{resp: map[string]any{"id": "branch-999", "status": "running"}}
+	}
+	client := &fakeMCPClient{
+		getBranchResults: responses,
+	}
+	clock := &fakeClock{}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+		pollInitial:   2 * time.Second,
+		pollMax:       5 * time.Second,
+		pollTimeout:   7 * time.Second,
+		pollBackoff:   2.0,
+		nowFunc:       clock.Now,
+		sleepFunc:     clock.Sleep,
+	}
+
+	_, err := handler.checkStatus(map[string]any{"branch_id": "branch-999"})
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	var te ToolExecutionError
+	if !errors.As(err, &te) {
+		t.Fatalf("expected ToolExecutionError, got %T", err)
+	}
+	if !strings.Contains(strings.ToLower(te.Msg), "timed out waiting for branch branch-999") {
+		t.Fatalf("unexpected timeout message: %q", te.Msg)
+	}
+	if client.getBranchCalls != 4 {
+		t.Fatalf("expected 4 GetBranch calls before timeout, got %d", client.getBranchCalls)
+	}
+
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 5 * time.Second}
+	if len(clock.sleeps) != len(want) {
+		t.Fatalf("expected %d sleeps, got %d (%v)", len(want), len(clock.sleeps), clock.sleeps)
+	}
+	for i, d := range want {
+		if clock.sleeps[i] != d {
+			t.Fatalf("sleep[%d]=%s, want %s; recorded sleeps=%v", i, clock.sleeps[i], d, clock.sleeps)
+		}
+	}
+}
+
 type branchReadInput struct {
 	branchID string
 	path     string
@@ -201,6 +288,8 @@ type fakeMCPClient struct {
 	branchOutputInputs   []branchOutputInput
 	branchOutputResult   map[string]any
 	branchOutputErr      error
+	getBranchResults     []branchStatusResult
+	getBranchCalls       int
 }
 
 type branchOutputInput struct {
@@ -217,6 +306,22 @@ func (f *fakeMCPClient) ParallelExplore(projectName, parentBranchID string, prom
 }
 
 func (f *fakeMCPClient) GetBranch(branchID string) (map[string]any, error) {
+	f.getBranchCalls++
+	if len(f.getBranchResults) > 0 {
+		result := f.getBranchResults[0]
+		f.getBranchResults = f.getBranchResults[1:]
+		if result.err != nil {
+			return nil, result.err
+		}
+		resp := map[string]any{}
+		for k, v := range result.resp {
+			resp[k] = v
+		}
+		if _, ok := resp["id"]; !ok {
+			resp["id"] = branchID
+		}
+		return resp, nil
+	}
 	return map[string]any{
 		"id":     branchID,
 		"status": "succeed",
@@ -264,4 +369,23 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 
 func notFoundErr(attempt int) error {
 	return fmt.Errorf("MCP HTTP 404: attempt %d not found", attempt)
+}
+
+type branchStatusResult struct {
+	resp map[string]any
+	err  error
+}
+
+type fakeClock struct {
+	now    time.Time
+	sleeps []time.Duration
+}
+
+func (c *fakeClock) Now() time.Time {
+	return c.now
+}
+
+func (c *fakeClock) Sleep(d time.Duration) {
+	c.sleeps = append(c.sleeps, d)
+	c.now = c.now.Add(d)
 }
