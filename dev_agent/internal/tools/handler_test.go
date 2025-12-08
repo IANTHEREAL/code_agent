@@ -5,7 +5,68 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestResolveTimeoutSecondsDefaultsTo1800(t *testing.T) {
+	handler := &ToolHandler{}
+	if got := handler.resolveTimeoutSeconds(nil); got != defaultStatusTimeoutSeconds {
+		t.Fatalf("expected default timeout %.0f, got %.0f", defaultStatusTimeoutSeconds, got)
+	}
+}
+
+func TestResolveTimeoutSecondsUsesConfiguredDefault(t *testing.T) {
+	handler := &ToolHandler{statusTimeout: 45 * time.Minute}
+	if got := handler.resolveTimeoutSeconds(nil); got != 2700 {
+		t.Fatalf("expected configured timeout 2700, got %.0f", got)
+	}
+}
+
+func TestResolveTimeoutSecondsPrefersArguments(t *testing.T) {
+	handler := &ToolHandler{statusTimeout: 90 * time.Minute}
+	args := map[string]any{"timeout_seconds": 120.0}
+	if got := handler.resolveTimeoutSeconds(args); got != 120 {
+		t.Fatalf("expected timeout override 120, got %.0f", got)
+	}
+}
+
+func TestCheckStatusHonorsConfiguredTimeout(t *testing.T) {
+	client := &timeoutClient{}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+		statusTimeout: 5 * time.Second,
+	}
+	clock := newFakeClock(time.Unix(0, 0))
+	handler.nowFn = clock.Now
+	handler.sleepFn = clock.Sleep
+
+	args := map[string]any{
+		"branch_id":                 "branch-123",
+		"poll_interval_seconds":     1.0,
+		"max_poll_interval_seconds": 1.0,
+	}
+
+	_, err := handler.checkStatus(args)
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	var te ToolExecutionError
+	if !errors.As(err, &te) {
+		t.Fatalf("expected ToolExecutionError, got %T", err)
+	}
+	if !strings.Contains(te.Msg, "Timed out waiting for branch") {
+		t.Fatalf("expected timeout error message, got %q", te.Msg)
+	}
+	elapsed := clock.Elapsed()
+	if elapsed < handler.statusTimeout {
+		t.Fatalf("elapsed time %s shorter than configured timeout %s", elapsed, handler.statusTimeout)
+	}
+	maxExpected := handler.statusTimeout + time.Second
+	if elapsed > maxExpected {
+		t.Fatalf("elapsed time %s exceeded %s", elapsed, maxExpected)
+	}
+}
 
 func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
 	client := &fakeMCPClient{
@@ -264,4 +325,50 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 
 func notFoundErr(attempt int) error {
 	return fmt.Errorf("MCP HTTP 404: attempt %d not found", attempt)
+}
+
+type timeoutClient struct {
+	getBranchCalls int
+}
+
+func (t *timeoutClient) ParallelExplore(projectName, parentBranchID string, prompts []string, agent string, numBranches int) (map[string]any, error) {
+	return nil, fmt.Errorf("unexpected call to ParallelExplore")
+}
+
+func (t *timeoutClient) GetBranch(branchID string) (map[string]any, error) {
+	t.getBranchCalls++
+	return map[string]any{
+		"id":             branchID,
+		"status":         "running",
+		"latest_snap_id": fmt.Sprintf("snap-%d", t.getBranchCalls),
+	}, nil
+}
+
+func (t *timeoutClient) BranchReadFile(branchID, filePath string) (map[string]any, error) {
+	return nil, fmt.Errorf("unexpected call to BranchReadFile")
+}
+
+func (t *timeoutClient) BranchOutput(branchID string, fullOutput bool) (map[string]any, error) {
+	return nil, fmt.Errorf("unexpected call to BranchOutput")
+}
+
+type fakeClock struct {
+	start time.Time
+	now   time.Time
+}
+
+func newFakeClock(start time.Time) *fakeClock {
+	return &fakeClock{start: start, now: start}
+}
+
+func (c *fakeClock) Now() time.Time {
+	return c.now
+}
+
+func (c *fakeClock) Sleep(d time.Duration) {
+	c.now = c.now.Add(d)
+}
+
+func (c *fakeClock) Elapsed() time.Duration {
+	return c.now.Sub(c.start)
 }

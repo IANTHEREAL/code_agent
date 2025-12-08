@@ -10,22 +10,25 @@ import (
 	"time"
 )
 
+const defaultBranchStatusTimeoutSeconds = 1800
+
 type AgentConfig struct {
-	AzureAPIKey       string
-	AzureEndpoint     string
-	AzureDeployment   string
-	AzureAPIVersion   string
-	MCPBaseURL        string
-	PollInitial       time.Duration
-	PollMax           time.Duration
-	PollTimeout       time.Duration
-	PollBackoffFactor float64
-	WorklogFilename   string
-	ProjectName       string
-	WorkspaceDir      string
-	GitHubToken       string
-	GitUserName       string
-	GitUserEmail      string
+	AzureAPIKey         string
+	AzureEndpoint       string
+	AzureDeployment     string
+	AzureAPIVersion     string
+	MCPBaseURL          string
+	PollInitial         time.Duration
+	PollMax             time.Duration
+	PollTimeout         time.Duration
+	PollBackoffFactor   float64
+	BranchStatusTimeout time.Duration
+	WorklogFilename     string
+	ProjectName         string
+	WorkspaceDir        string
+	GitHubToken         string
+	GitUserName         string
+	GitUserEmail        string
 }
 
 func FromEnv() (AgentConfig, error) {
@@ -82,6 +85,13 @@ func FromEnv() (AgentConfig, error) {
 	if pollTimeout <= pollMax {
 		return AgentConfig{}, errors.New("MCP_POLL_TIMEOUT_SECONDS must be greater than MCP_POLL_MAX_SECONDS")
 	}
+	branchTimeout, err := envSeconds("BRANCH_STATUS_TIMEOUT_SECONDS", defaultBranchStatusTimeoutSeconds)
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	if branchTimeout <= 0 {
+		return AgentConfig{}, errors.New("BRANCH_STATUS_TIMEOUT_SECONDS must be greater than 0")
+	}
 
 	project := os.Getenv("PROJECT_NAME")
 	workspace := os.Getenv("WORKSPACE_DIR")
@@ -113,21 +123,22 @@ func FromEnv() (AgentConfig, error) {
 	}
 
 	return AgentConfig{
-		AzureAPIKey:       apiKey,
-		AzureEndpoint:     endpoint,
-		AzureDeployment:   deployment,
-		AzureAPIVersion:   apiVersion,
-		MCPBaseURL:        baseURL,
-		PollInitial:       pollInitial,
-		PollMax:           pollMax,
-		PollTimeout:       pollTimeout,
-		PollBackoffFactor: backoff,
-		WorklogFilename:   "worklog.md",
-		ProjectName:       project,
-		WorkspaceDir:      workspace,
-		GitHubToken:       githubToken,
-		GitUserName:       gitUserName,
-		GitUserEmail:      gitUserEmail,
+		AzureAPIKey:         apiKey,
+		AzureEndpoint:       endpoint,
+		AzureDeployment:     deployment,
+		AzureAPIVersion:     apiVersion,
+		MCPBaseURL:          baseURL,
+		PollInitial:         pollInitial,
+		PollMax:             pollMax,
+		PollTimeout:         pollTimeout,
+		PollBackoffFactor:   backoff,
+		BranchStatusTimeout: branchTimeout,
+		WorklogFilename:     "worklog.md",
+		ProjectName:         project,
+		WorkspaceDir:        workspace,
+		GitHubToken:         githubToken,
+		GitUserName:         gitUserName,
+		GitUserEmail:        gitUserEmail,
 	}, nil
 }
 
