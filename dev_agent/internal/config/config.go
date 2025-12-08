@@ -19,6 +19,7 @@ type AgentConfig struct {
 	PollInitial       time.Duration
 	PollMax           time.Duration
 	PollTimeout       time.Duration
+	BranchTimeout     time.Duration
 	PollBackoffFactor float64
 	WorklogFilename   string
 	ProjectName       string
@@ -83,6 +84,14 @@ func FromEnv() (AgentConfig, error) {
 		return AgentConfig{}, errors.New("MCP_POLL_TIMEOUT_SECONDS must be greater than MCP_POLL_MAX_SECONDS")
 	}
 
+	branchTimeout, err := envSeconds("BRANCH_TIMEOUT_SECONDS", 1800)
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	if branchTimeout <= 0 {
+		return AgentConfig{}, errors.New("BRANCH_TIMEOUT_SECONDS must be greater than 0")
+	}
+
 	project := os.Getenv("PROJECT_NAME")
 	workspace := os.Getenv("WORKSPACE_DIR")
 	if workspace == "" {
@@ -121,6 +130,7 @@ func FromEnv() (AgentConfig, error) {
 		PollInitial:       pollInitial,
 		PollMax:           pollMax,
 		PollTimeout:       pollTimeout,
+		BranchTimeout:     branchTimeout,
 		PollBackoffFactor: backoff,
 		WorklogFilename:   "worklog.md",
 		ProjectName:       project,
