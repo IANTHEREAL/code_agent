@@ -57,22 +57,41 @@ func (t *BranchTracker) Range() map[string]string {
 }
 
 type ToolHandler struct {
-	client        agentClient
-	defaultProj   string
-	branchTracker *BranchTracker
-	workspaceDir  string
+	client              agentClient
+	defaultProj         string
+	branchTracker       *BranchTracker
+	workspaceDir        string
+	branchStatusTimeout time.Duration
+	clock               clock
 }
 
-func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
+func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string, branchTimeout time.Duration) *ToolHandler {
+	if branchTimeout <= 0 {
+		branchTimeout = 30 * time.Minute
+	}
 	return &ToolHandler{
-		client:        client,
-		defaultProj:   defaultProject,
-		branchTracker: NewBranchTracker(startBranch),
-		workspaceDir:  strings.TrimSpace(workspaceDir),
+		client:              client,
+		defaultProj:         defaultProject,
+		branchTracker:       NewBranchTracker(startBranch),
+		workspaceDir:        strings.TrimSpace(workspaceDir),
+		branchStatusTimeout: branchTimeout,
+		clock:               realClock{},
 	}
 }
 
 func (h *ToolHandler) BranchRange() map[string]string { return h.branchTracker.Range() }
+
+type clock interface {
+	Now() time.Time
+	Sleep(time.Duration)
+}
+
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
+func (realClock) Sleep(d time.Duration) {
+	time.Sleep(d)
+}
 
 // ToolCall mirrors brain.ToolCall, but we keep it generic here if needed.
 type ToolCall struct {
@@ -116,6 +135,32 @@ func (h *ToolHandler) Handle(call ToolCall) map[string]any {
 		return h.errorPayload(err)
 	}
 	return map[string]any{"status": "success", "data": res}
+}
+
+func (h *ToolHandler) statusTimeout(arguments map[string]any) time.Duration {
+	timeout := h.branchStatusTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Minute
+	}
+	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
+		timeout = time.Duration(v * float64(time.Second))
+	}
+	return timeout
+}
+
+func (h *ToolHandler) now() time.Time {
+	if h != nil && h.clock != nil {
+		return h.clock.Now()
+	}
+	return time.Now()
+}
+
+func (h *ToolHandler) sleep(d time.Duration) {
+	if h != nil && h.clock != nil {
+		h.clock.Sleep(d)
+		return
+	}
+	time.Sleep(d)
 }
 
 func (h *ToolHandler) executeAgent(arguments map[string]any) (map[string]any, error) {
@@ -265,10 +310,7 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
-	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
-		timeout = v
-	}
+	timeout := h.statusTimeout(arguments)
 	poll := 3.0
 	if v, ok := arguments["poll_interval_seconds"].(float64); ok && v > 0 {
 		poll = v
@@ -277,10 +319,10 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if v, ok := arguments["max_poll_interval_seconds"].(float64); ok && v >= poll {
 		maxPoll = v
 	}
-	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	deadline := h.now().Add(timeout)
 	sleep := time.Duration(poll * float64(time.Second))
 
-	logx.Infof("Checking status for branch %s (timeout=%ds)", branchID, int(timeout))
+	logx.Infof("Checking status for branch %s (timeout=%ds)", branchID, int(timeout.Seconds()))
 	for attempt := 1; ; attempt++ {
 		resp, err := h.client.GetBranch(branchID)
 		if err != nil {
@@ -339,14 +381,14 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 			}
 			return resp, nil
 		}
-		if time.Now().After(deadline) {
+		if h.now().After(deadline) {
 			return nil, ToolExecutionError{
 				Msg:         fmt.Sprintf("Timed out waiting for branch %s (last status=%s)", branchID, status),
 				Instruction: instructionFinishedWithErr,
 			}
 		}
 		logx.Infof("Branch %s still active (status=%s). Sleeping %.1fs.", branchID, status, sleep.Seconds())
-		time.Sleep(sleep)
+		h.sleep(sleep)
 		// exponential-ish backoff
 		sleep = time.Duration(minFloat(float64(sleep/time.Second)*1.5, maxPoll)) * time.Second
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestExecuteAgentReviewCodeRetriesMissingLog(t *testing.T) {
@@ -184,6 +185,87 @@ func TestReadArtifactHandlesErrorPayload(t *testing.T) {
 	}
 }
 
+func TestCheckStatusUsesConfiguredTimeout(t *testing.T) {
+	attempts := 0
+	client := &fakeMCPClient{
+		getBranchFunc: func(branchID string) (map[string]any, error) {
+			attempts++
+			return map[string]any{
+				"id":             branchID,
+				"status":         "running",
+				"latest_snap_id": fmt.Sprintf("snap-%d", attempts),
+			}, nil
+		},
+	}
+	clock := newFakeClock()
+	handler := &ToolHandler{
+		client:              client,
+		branchTracker:       NewBranchTracker("parent"),
+		branchStatusTimeout: 5 * time.Second,
+		clock:               clock,
+	}
+
+	_, err := handler.checkStatus(map[string]any{
+		"branch_id":                 "branch-1",
+		"poll_interval_seconds":     1,
+		"max_poll_interval_seconds": 1,
+	})
+	if err == nil {
+		t.Fatalf("expected timeout error, got nil")
+	}
+	var te ToolExecutionError
+	if !errors.As(err, &te) || !strings.Contains(strings.ToLower(te.Msg), "timed out") {
+		t.Fatalf("expected timeout ToolExecutionError, got %#v", err)
+	}
+	elapsed := clock.Elapsed()
+	if elapsed < handler.branchStatusTimeout {
+		t.Fatalf("expected to wait at least %s, got %s", handler.branchStatusTimeout, elapsed)
+	}
+	if elapsed > handler.branchStatusTimeout*2 {
+		t.Fatalf("expected timeout near %s, got %s", handler.branchStatusTimeout, elapsed)
+	}
+}
+
+func TestCheckStatusAllowsSlowCompletionWithinTimeout(t *testing.T) {
+	attempts := 0
+	client := &fakeMCPClient{
+		getBranchFunc: func(branchID string) (map[string]any, error) {
+			attempts++
+			status := "running"
+			if attempts >= 3 {
+				status = "succeed"
+			}
+			return map[string]any{
+				"id":             branchID,
+				"status":         status,
+				"latest_snap_id": fmt.Sprintf("snap-%d", attempts),
+			}, nil
+		},
+	}
+	clock := newFakeClock()
+	handler := &ToolHandler{
+		client:              client,
+		branchTracker:       NewBranchTracker("parent"),
+		branchStatusTimeout: 10 * time.Second,
+		clock:               clock,
+	}
+
+	resp, err := handler.checkStatus(map[string]any{
+		"branch_id":                 "branch-2",
+		"poll_interval_seconds":     1,
+		"max_poll_interval_seconds": 1,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if status := stringsLower(resp["status"]); status != "succeed" {
+		t.Fatalf("expected succeed status, got %s", status)
+	}
+	if elapsed := clock.Elapsed(); elapsed < 2*time.Second || elapsed >= handler.branchStatusTimeout {
+		t.Fatalf("expected elapsed between 2s and %s, got %s", handler.branchStatusTimeout, elapsed)
+	}
+}
+
 type branchReadInput struct {
 	branchID string
 	path     string
@@ -201,6 +283,7 @@ type fakeMCPClient struct {
 	branchOutputInputs   []branchOutputInput
 	branchOutputResult   map[string]any
 	branchOutputErr      error
+	getBranchFunc        func(string) (map[string]any, error)
 }
 
 type branchOutputInput struct {
@@ -217,6 +300,9 @@ func (f *fakeMCPClient) ParallelExplore(projectName, parentBranchID string, prom
 }
 
 func (f *fakeMCPClient) GetBranch(branchID string) (map[string]any, error) {
+	if f.getBranchFunc != nil {
+		return f.getBranchFunc(branchID)
+	}
 	return map[string]any{
 		"id":     branchID,
 		"status": "succeed",
@@ -264,4 +350,29 @@ func (f *fakeMCPClient) BranchOutput(branchID string, fullOutput bool) (map[stri
 
 func notFoundErr(attempt int) error {
 	return fmt.Errorf("MCP HTTP 404: attempt %d not found", attempt)
+}
+
+type fakeClock struct {
+	now   time.Time
+	start time.Time
+}
+
+func newFakeClock() *fakeClock {
+	start := time.Unix(0, 0)
+	return &fakeClock{now: start, start: start}
+}
+
+func (f *fakeClock) Now() time.Time {
+	return f.now
+}
+
+func (f *fakeClock) Sleep(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	f.now = f.now.Add(d)
+}
+
+func (f *fakeClock) Elapsed() time.Duration {
+	return f.now.Sub(f.start)
 }
