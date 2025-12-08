@@ -18,6 +18,23 @@ func TestBuildReviewPromptFocusesSingleCriticalIssue(t *testing.T) {
 	}
 }
 
+func TestBuildVerifierPromptContainsLinusDirectives(t *testing.T) {
+	prompt := buildVerifierPrompt("verifier-alpha", "some task", "some issue", "", 1)
+	requiredPhrases := []string{
+		"Linus Torvalds persona",
+		"Chesterton's Fence",
+		"Safety First",
+		"Architectural Intent",
+		"Reproduction Summary",
+		"core test snippet",
+	}
+	for _, phrase := range requiredPhrases {
+		if !strings.Contains(prompt, phrase) {
+			t.Errorf("verifier prompt missing core directive: %q", phrase)
+		}
+	}
+}
+
 func TestParseConsensus(t *testing.T) {
 	raw := "```json\n{\"agree\": true, \"explanation\": \"same failure\"}\n```"
 	verdict, err := parseConsensus(raw)

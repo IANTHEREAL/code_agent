@@ -31,14 +31,14 @@ Per branch:
 
 ## Phase 2 – Confirmation (per issue)
 
-1. Run `codex-alpha` and `codex-beta` via `execute_agent` on the same issue.
-   - Prompts ask them to inspect the repo/PR diff, describe reproduction, and propose a minimal failing test.
-2. Consensus check via brain:
+1. Use `issue verifier A` and `issue verifier B` via `execute_agent(agent='codex', prompt='...')` on the same issue.
+   - Prompts ask them to inspect the repo/PR diff, write a minimal failing test to reproduce the issue.
+2. Consensus check via `execute_agent(agent='codex', prompt='...')`:
    ```
-   {"agree":true/false,"explanation":"..."}
+   {"agree":true/false,"report":"..."}
    ```
 3. If they disagree, run **one** exchange round: each agent sees the peer transcript and updates their verdict/test.
-4. Final verdict: `confirmed` if agree, otherwise `unresolved`, recording both transcripts and the explanation.
+4. Final verdict: `confirmed` if agree, otherwise `unresolved`, recording both transcripts and the report.
 
 ## Completion & Exit Conditions
 
@@ -53,12 +53,12 @@ function run_pr_review(ctx):
     issue = pick_top_issue(log)
     if issue is none: return {status:"clean"}
 
-    alpha = run_codex("codex-alpha", issue)
-    beta = run_codex("codex-beta", issue)
+    alpha = run_codex("issue verifier A", issue)
+    beta = run_codex("issue verifier B", issue)
     verdict = consensus_check(issue, alpha, beta)
     if !verdict.agree:
-        alpha = run_codex("codex-alpha", issue, peer=beta)
-        beta = run_codex("codex-beta", issue, peer=alpha)
+        alpha = run_codex("issue verifier A", issue, peer=beta)
+        beta = run_codex("issue verifier B", issue, peer=alpha)
         verdict = consensus_check(issue, alpha, beta)
     return summarize(issue, verdict, alpha, beta)
 ```

@@ -128,8 +128,21 @@ func (r *Runner) Run() (*Result, error) {
 		return result, nil
 	}
 
+	// Check if the report actually describes a real issue
+	hasIssue, err := r.hasRealIssue(reviewLog.Report)
+	if err != nil {
+		return nil, err
+	}
+	if !hasIssue {
+		result.Status = statusClean
+		result.Summary = "Clean PR: review_code found no blocking issues."
+		r.attachBranchRange(result)
+		return result, nil
+	}
+
 	issueText := reviewLog.Report
-	report, err := r.confirmIssue(issueText)
+	// Pass the reviewer's branch ID to start the verification chain
+	report, err := r.confirmIssue(issueText, reviewLog.BranchID)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +172,7 @@ func (r *Runner) attachBranchRange(res *Result) {
 
 func (r *Runner) runSingleReview() (ReviewerLog, error) {
 	prompt := buildReviewPrompt(r.opts.Task)
-	data, err := r.executeAgent("review_code", prompt)
+	data, err := r.executeAgent("review_code", prompt, r.opts.ParentBranchID)
 	if err != nil {
 		return ReviewerLog{}, err
 	}
@@ -174,12 +187,16 @@ func (r *Runner) runSingleReview() (ReviewerLog, error) {
 	}, nil
 }
 
-func (r *Runner) confirmIssue(issueText string) (IssueReport, error) {
-	alpha, err := r.runCodex("codex-alpha", issueText, "", 1)
+func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueReport, error) {
+	// Linear chaining:
+	// Verifier Alpha starts from startBranchID (Reviewer's branch).
+	alpha, err := r.runVerifier("verifier-alpha", issueText, "", 1, startBranchID)
 	if err != nil {
 		return IssueReport{}, err
 	}
-	beta, err := r.runCodex("codex-beta", issueText, "", 1)
+
+	// Verifier Beta starts from Alpha's branch.
+	beta, err := r.runVerifier("verifier-beta", issueText, "", 1, alpha.BranchID)
 	if err != nil {
 		return IssueReport{}, err
 	}
@@ -192,11 +209,14 @@ func (r *Runner) confirmIssue(issueText string) (IssueReport, error) {
 	exchanges := 0
 	for !verdict.Agree && exchanges < r.opts.MaxExchangeRuns {
 		exchanges++
-		alpha, err = r.runCodex("codex-alpha", issueText, beta.Text, alpha.Round+1)
+		// Continue the chain
+		// Alpha starts from Beta's branch
+		alpha, err = r.runVerifier("verifier-alpha", issueText, beta.Text, alpha.Round+1, beta.BranchID)
 		if err != nil {
 			return IssueReport{}, err
 		}
-		beta, err = r.runCodex("codex-beta", issueText, alpha.Text, beta.Round+1)
+		// Beta starts from Alpha's (new) branch
+		beta, err = r.runVerifier("verifier-beta", issueText, alpha.Text, beta.Round+1, alpha.BranchID)
 		if err != nil {
 			return IssueReport{}, err
 		}
@@ -221,9 +241,14 @@ func (r *Runner) confirmIssue(issueText string) (IssueReport, error) {
 	return report, nil
 }
 
-func (r *Runner) runCodex(label string, issueText string, peerTranscript string, round int) (Transcript, error) {
-	prompt := buildCodexPrompt(label, r.opts.Task, issueText, peerTranscript, round)
-	data, err := r.executeAgent("codex", prompt)
+func (r *Runner) runVerifier(label string, issueText string, peerTranscript string, round int, parentBranchID string) (Transcript, error) {
+	prompt := buildVerifierPrompt(label, r.opts.Task, issueText, peerTranscript, round)
+	// Select agent: use codex-claude for verifier-beta, codex for others
+	agent := "codex"
+	if label == "verifier-beta" {
+		agent = "claude_code"
+	}
+	data, err := r.executeAgent(agent, prompt, parentBranchID)
 	if err != nil {
 		return Transcript{}, err
 	}
@@ -235,12 +260,12 @@ func (r *Runner) runCodex(label string, issueText string, peerTranscript string,
 	}, nil
 }
 
-func (r *Runner) executeAgent(agent, prompt string) (map[string]any, error) {
+func (r *Runner) executeAgent(agent, prompt, parentBranchID string) (map[string]any, error) {
 	args := map[string]any{
 		"agent":            agent,
 		"prompt":           prompt,
 		"project_name":     r.opts.ProjectName,
-		"parent_branch_id": r.opts.ParentBranchID,
+		"parent_branch_id": parentBranchID,
 	}
 	return r.callTool("execute_agent", args)
 }
@@ -280,6 +305,26 @@ func (r *Runner) callTool(name string, args map[string]any) (map[string]any, err
 		return nil, fmt.Errorf("%s returned no data", name)
 	}
 	return data, nil
+}
+
+func (r *Runner) hasRealIssue(reportText string) (bool, error) {
+	prompt := fmt.Sprintf("Review report:\n%s\n\nDoes this report describe a real P0/P1 bug/issue that needs fixing? Reply ONLY with JSON: {\"has_issue\": true} or {\"has_issue\": false}", reportText)
+	resp, err := r.brain.Complete([]b.ChatMessage{
+		{Role: "system", Content: "Analyze code review reports. Reply only with JSON."},
+		{Role: "user", Content: prompt},
+	}, nil)
+	if err != nil {
+		return false, err
+	}
+	type issueCheck struct {
+		HasIssue bool `json:"has_issue"`
+	}
+	jsonBlock := extractJSONBlock(resp.Choices[0].Message.Content)
+	var check issueCheck
+	if err := json.Unmarshal([]byte(jsonBlock), &check); err != nil {
+		return false, err
+	}
+	return check.HasIssue, nil
 }
 
 func (r *Runner) checkConsensus(issueText string, alpha Transcript, beta Transcript) (consensusVerdict, error) {

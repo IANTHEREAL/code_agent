@@ -148,8 +148,15 @@ func (h *ToolHandler) runAgentOnce(agent, project, parent, prompt string) (map[s
 		}
 	}
 	if isErr, ok := resp["isError"].(bool); ok && isErr {
+		errMsg := resp["error"]
+		if errMsg == nil {
+			return nil, "", ToolExecutionError{
+				Msg:         fmt.Sprintf("ParallelExplore returned error (details: %v)", resp),
+				Instruction: instructionFinishedWithErr,
+			}
+		}
 		return nil, "", ToolExecutionError{
-			Msg:         fmt.Sprintf("ParallelExplore returned error: %v", resp["error"]),
+			Msg:         fmt.Sprintf("ParallelExplore returned error: %v", errMsg),
 			Instruction: instructionFinishedWithErr,
 		}
 	}
@@ -325,7 +332,7 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 		}
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
-		if hasNewSnapshot && (status == "succeed" || status == "failed") {
+		if hasNewSnapshot && (status == "succeed" || status == "failed" || status == "manifesting") {
 			if status == "failed" {
 				details := map[string]any{"status": status}
 				if branchID := ExtractBranchID(resp); branchID != "" {
