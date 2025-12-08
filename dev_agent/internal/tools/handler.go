@@ -9,6 +9,11 @@ import (
 	"time"
 )
 
+var (
+	timeNow   = time.Now
+	timeSleep = time.Sleep
+)
+
 type ToolExecutionError struct {
 	Msg         string
 	Instruction string
@@ -31,6 +36,7 @@ const (
 	reviewArtifactName         = "code_review.log"
 	reviewMaxAttempts          = 3
 	instructionFinishedWithErr = "FINISHED_WITH_ERROR"
+	defaultStatusTimeout       = 30 * time.Minute
 )
 
 type BranchTracker struct {
@@ -61,14 +67,19 @@ type ToolHandler struct {
 	defaultProj   string
 	branchTracker *BranchTracker
 	workspaceDir  string
+	statusTimeout time.Duration
 }
 
-func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
+func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string, statusTimeout time.Duration) *ToolHandler {
+	if statusTimeout <= 0 {
+		statusTimeout = defaultStatusTimeout
+	}
 	return &ToolHandler{
 		client:        client,
 		defaultProj:   defaultProject,
 		branchTracker: NewBranchTracker(startBranch),
 		workspaceDir:  strings.TrimSpace(workspaceDir),
+		statusTimeout: statusTimeout,
 	}
 }
 
@@ -265,9 +276,12 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
+	timeout := h.statusTimeout
+	if timeout <= 0 {
+		timeout = defaultStatusTimeout
+	}
 	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
-		timeout = v
+		timeout = time.Duration(v * float64(time.Second))
 	}
 	poll := 3.0
 	if v, ok := arguments["poll_interval_seconds"].(float64); ok && v > 0 {
@@ -277,10 +291,10 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if v, ok := arguments["max_poll_interval_seconds"].(float64); ok && v >= poll {
 		maxPoll = v
 	}
-	deadline := time.Now().Add(time.Duration(timeout) * time.Second)
+	deadline := timeNow().Add(timeout)
 	sleep := time.Duration(poll * float64(time.Second))
 
-	logx.Infof("Checking status for branch %s (timeout=%ds)", branchID, int(timeout))
+	logx.Infof("Checking status for branch %s (timeout=%ds)", branchID, int(timeout.Seconds()))
 	for attempt := 1; ; attempt++ {
 		resp, err := h.client.GetBranch(branchID)
 		if err != nil {
@@ -339,14 +353,14 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 			}
 			return resp, nil
 		}
-		if time.Now().After(deadline) {
+		if timeNow().After(deadline) {
 			return nil, ToolExecutionError{
 				Msg:         fmt.Sprintf("Timed out waiting for branch %s (last status=%s)", branchID, status),
 				Instruction: instructionFinishedWithErr,
 			}
 		}
 		logx.Infof("Branch %s still active (status=%s). Sleeping %.1fs.", branchID, status, sleep.Seconds())
-		time.Sleep(sleep)
+		timeSleep(sleep)
 		// exponential-ish backoff
 		sleep = time.Duration(minFloat(float64(sleep/time.Second)*1.5, maxPoll)) * time.Second
 	}
