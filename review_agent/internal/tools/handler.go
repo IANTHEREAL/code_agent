@@ -324,7 +324,9 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 				hasNewSnapshot = false
 			} else {
 				parent_latest_snap_id := stringsLower(parent_resp["latest_snap_id"])
-				// if the parent branch has the same latest snap id, we can continue to wait for the branch to complete or fail
+				// If child's latest_snap_id matches parent's, the child is still using the inherited snapshot.
+				// The status we see might be inherited from parent, not the child's own status.
+				// We must wait for the child to create its own snapshot before trusting the status.
 				if parent_latest_snap_id != "" && parent_latest_snap_id == latest_snap_id {
 					hasNewSnapshot = false
 				}
