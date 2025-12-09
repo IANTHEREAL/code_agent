@@ -245,9 +245,6 @@ func (r *Runner) runVerifier(label string, issueText string, peerTranscript stri
 	prompt := buildVerifierPrompt(label, r.opts.Task, issueText, peerTranscript, round)
 	// Select agent: use codex-claude for verifier-beta, codex for others
 	agent := "codex"
-	if label == "verifier-beta" {
-		agent = "claude_code"
-	}
 	data, err := r.executeAgent(agent, prompt, parentBranchID)
 	if err != nil {
 		return Transcript{}, err
