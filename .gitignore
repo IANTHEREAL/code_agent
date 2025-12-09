@@ -177,6 +177,7 @@ dmypy.json
 .pyre/
 
 # pytype static type analyzer
+*.gocache*
 .pytype/
 
 # Cython debug symbols

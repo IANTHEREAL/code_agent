@@ -7,124 +7,150 @@ import (
 	"strings"
 )
 
-func buildReviewPrompt(task string) string {
-	var sb strings.Builder
-	sb.WriteString("You are running review_code on a GitHub PR.\n\n")
-	sb.WriteString("PR to review:\n")
-	sb.WriteString(task)
-	sb.WriteString("\n\nGoals:\n")
-	sb.WriteString("- Identify the single most critical P0/P1 defect in this PR.\n")
-	sb.WriteString("- Provide reproduction steps and a minimal failing test idea.\n")
-	sb.WriteString("- If your analysis depends on system behavior (e.g., async timing), state your assumptions explicitly.\n")
-	return sb.String()
+func buildIssueFinderPrompt(task string) string {
+	return "base-branch main"
 }
 
-func buildVerifierPrompt(label, task string, issueText string, peerTranscript string, round int) string {
+// buildReviewerPrompt creates the prompt for the Reviewer role (logic analysis).
+func buildLogicAnalystPrompt(task string, issueText string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Verification Task: %s\n\n", label))
+	sb.WriteString("Verification Role: REVIEWER\n\n")
 	sb.WriteString("Task / PR context:\n")
 	sb.WriteString(task)
 	sb.WriteString("\n\nIssue under review:\n")
 	sb.WriteString(issueText)
 	sb.WriteString("\n\n")
-	sb.WriteString("GOAL: Determine if this is a valid, critical bug through multi-perspective analysis.\n\n")
-	sb.WriteString("SIMULATION FRAMEWORK:\n")
-	sb.WriteString("Simulate a panel discussion between three experts examining this issue:\n\n")
-	sb.WriteString("1. **The Skeptic** - Assumes the current code is correct. Asks:\n")
-	sb.WriteString("   - What architectural constraint might justify this behavior?\n")
-	sb.WriteString("   - What would break if we 'fixed' this?\n")
-	sb.WriteString("   - Is the reporter misunderstanding the design?\n\n")
-	sb.WriteString("2. **The Detective** - Follows evidence trails. Asks:\n")
-	sb.WriteString("   - What does the actual running code do? (not what we assume)\n")
-	sb.WriteString("   - Can we trace the execution path?\n")
-	sb.WriteString("   - What do the real error messages say?\n\n")
-	sb.WriteString("3. **The Adversary** - Challenges all claims. Asks:\n")
-	sb.WriteString("   - Is this evidence based on real behavior or fabricated mocks?\n")
-	sb.WriteString("   - Does the test actually prove what it claims?\n")
-	sb.WriteString("   - What alternative explanations exist?\n\n")
+	sb.WriteString("YOUR ROLE: Analyze code logic to determine if this is a valid bug.\n\n")
+	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n\n")
+	sb.WriteString("Their task:\n")
+	sb.WriteString("- Analyze the code logic for correctness\n")
+	sb.WriteString("- Check for edge cases and error handling\n")
+	sb.WriteString("- Understand the architectural intent (Chesterton's Fence: why does this code exist?)\n")
+	sb.WriteString("- Identify if the reported issue is a real bug or a misunderstanding\n\n")
 	sb.WriteString("EVIDENCE STANDARDS:\n")
-	sb.WriteString("What counts as valid evidence:\n")
-	sb.WriteString("✓ Actual error messages from running the real system\n")
-	sb.WriteString("✓ Code traces showing execution paths\n")
-	sb.WriteString("✓ Git history revealing design intent\n")
-	sb.WriteString("✓ Test results from real system components\n\n")
-	sb.WriteString("What does NOT count:\n")
-	sb.WriteString("✗ Mock behavior you created for the test\n")
-	sb.WriteString("✗ Assumptions about what 'should' happen\n")
-	sb.WriteString("✗ Documentation without code verification\n")
-	sb.WriteString("✗ 'This looks wrong' intuitions\n\n")
-	sb.WriteString("VERIFICATION PROCESS:\n")
-	sb.WriteString("1. What would the Skeptic say about the reporter's claim?\n")
-	sb.WriteString("2. What evidence would the Detective gather to test it?\n")
-	sb.WriteString("3. How would the Adversary challenge that evidence?\n")
-	sb.WriteString("4. After this adversarial examination, what's left standing?\n\n")
-
-	// Round-specific guidance
-	if round == 1 {
-		sb.WriteString("This is Round 1. Independently verify the issue.\n\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("This is Round %d. Build on or challenge prior work.\n\n", round))
-	}
-
-	if peerTranscript != "" {
-		sb.WriteString("Peer transcript (Previous Verifier's Work):\n<<<PEER>>>\n")
-		sb.WriteString(peerTranscript)
-		sb.WriteString("\n<<<END PEER>>>\n")
-		sb.WriteString("Critique the peer's reasoning. Did they miss the architectural intent? Did they fabricate evidence? Did they propose an unsafe fix?\n\n")
-	}
-
+	sb.WriteString("✓ Valid: Code traces, execution paths, architectural analysis\n")
+	sb.WriteString("✗ Invalid: Assumptions, intuitions, \"this looks wrong\"\n\n")
 	sb.WriteString("RESPONSE FORMAT:\n")
-	sb.WriteString("Start with an explicit verdict:\n")
-	sb.WriteString("  # VERDICT: [CONFIRMED | REJECTED]\n\n")
-	sb.WriteString("If CONFIRMED, use this EXACT structure:\n")
-	sb.WriteString("  ## <Short Title>\n\n")
-	sb.WriteString("  ### Issue Location\n")
-	sb.WriteString("  `path/to/file:line` (can be multiple locations)\n\n")
-	sb.WriteString("  ### Problem Summary\n")
-	sb.WriteString("  <Concise description of what's wrong>\n\n")
-	sb.WriteString("  ### Root Cause Analysis\n")
-	sb.WriteString("  <Detailed trace through the code. Use tables, step-by-step lists, or code snippets to show the bug path.>\n\n")
-	sb.WriteString("  ### Impact\n")
-	sb.WriteString("  <What breaks? Wrong results, crash, performance, scope of affected queries/features.>\n\n")
-	sb.WriteString("  ### Suggested Fix\n")
-	sb.WriteString("  ```\n  // Code snippet in the project's language\n  ```\n\n")
-	sb.WriteString("If REJECTED, use this structure:\n")
-	sb.WriteString("  ## Why This Is Not A Bug\n\n")
-	sb.WriteString("  ### Architectural Intent\n")
-	sb.WriteString("  <Why the current code is correct. What did the reporter miss?>\n\n")
-	sb.WriteString("  ### Evidence\n")
-	sb.WriteString("  <Test results, documentation, or code analysis proving it's not a bug.>\n")
+	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n\n")
+	sb.WriteString("Then provide:\n")
+	sb.WriteString("## Reasoning\n")
+	sb.WriteString("<Your analysis of the code logic>\n\n")
+	sb.WriteString("## Evidence\n")
+	sb.WriteString("<Code traces or architectural analysis supporting your verdict>\n")
 	return sb.String()
 }
 
-type consensusVerdict struct {
-	Agree       bool   `json:"agree"`
-	Explanation string `json:"explanation"`
-}
-
-func buildConsensusPrompt(issueText string, alpha Transcript, beta Transcript) string {
+// buildTesterPrompt creates the prompt for the Tester role (reproduction).
+func buildTesterPrompt(task string, issueText string) string {
 	var sb strings.Builder
-	sb.WriteString("Compare the two codex transcripts below for the same issue.\n\n")
+	sb.WriteString("Verification Role: TESTER\n\n")
+	sb.WriteString("Task / PR context:\n")
+	sb.WriteString(task)
+	sb.WriteString("\n\nIssue under review:\n")
 	sb.WriteString(issueText)
-	sb.WriteString("\n\nTranscript A:\n")
-	sb.WriteString(alpha.Text)
-	sb.WriteString("\n\nTranscript B:\n")
-	sb.WriteString(beta.Text)
-	sb.WriteString("\n\nReply ONLY JSON: {\"agree\":true/false,\"explanation\":\"...\"}. agree=true only if both confirm the same defect and failing test.\n")
+	sb.WriteString("\n\n")
+	sb.WriteString("YOUR ROLE: Reproduce the issue by actually running code.\n\n")
+	sb.WriteString("Simulate a QA engineer who verifies bugs by running real tests.\n\n")
+	sb.WriteString("Their task:\n")
+	sb.WriteString("- Attempt to reproduce the reported issue\n")
+	sb.WriteString("- Write and run a minimal failing test\n")
+	sb.WriteString("- Trace actual execution paths\n")
+	sb.WriteString("- Collect real error messages (not assumptions)\n\n")
+	sb.WriteString("CRITICAL: You MUST actually run code to collect evidence.\n")
+	sb.WriteString("Do NOT fabricate test results or mock behavior.\n\n")
+	sb.WriteString("EVIDENCE STANDARDS:\n")
+	sb.WriteString("✓ Valid: Actual test output, real error messages, execution traces\n")
+	sb.WriteString("✗ Invalid: Self-created mocks, assumed behavior, \"should\" statements\n\n")
+	sb.WriteString("RESPONSE FORMAT:\n")
+	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n\n")
+	sb.WriteString("Then provide:\n")
+	sb.WriteString("## Reproduction Steps\n")
+	sb.WriteString("<What you did to reproduce>\n\n")
+	sb.WriteString("## Test Evidence\n")
+	sb.WriteString("<Actual test output or error messages>\n")
 	return sb.String()
 }
 
-func parseConsensus(raw string) (consensusVerdict, error) {
+// buildExchangePrompt creates the prompt for Round 2 (exchange opinions).
+func buildExchangePrompt(role string, task string, issueText string, selfOpinion string, peerOpinion string) string {
+	normalizedRole := strings.ToLower(strings.TrimSpace(role))
+	displayRole := strings.ToUpper(role)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Verification Role: %s (Round 2 - Exchange)\n\n", displayRole))
+	sb.WriteString("Task / PR context:\n")
+	sb.WriteString(task)
+	sb.WriteString("\n\nIssue under review:\n")
+	sb.WriteString(issueText)
+	sb.WriteString("\n\n")
+	sb.WriteString("YOUR PREVIOUS OPINION:\n<<<SELF>>>\n")
+	sb.WriteString(selfOpinion)
+	sb.WriteString("\n<<<END SELF>>>\n\n")
+	sb.WriteString("PEER'S OPINION:\n<<<PEER>>>\n")
+	sb.WriteString(peerOpinion)
+	sb.WriteString("\n<<<END PEER>>>\n\n")
+	sb.WriteString("ROLE REMINDER:\n")
+	switch normalizedRole {
+	case "reviewer":
+		sb.WriteString("- You remain the logic analysis reviewer. Focus on code logic and architecture.\n")
+		sb.WriteString("- Do NOT claim you ran tests; rely on reasoning and Chesterton's Fence thinking.\n")
+	case "tester":
+		sb.WriteString("- You remain the tester. You must run code and capture actual execution output.\n")
+		sb.WriteString("- Provide real execution evidence such as logs or failing test output.\n")
+	default:
+		sb.WriteString("- Stay consistent with your original role responsibilities.\n")
+	}
+	sb.WriteString("\n")
+	sb.WriteString("YOUR TASK:\n")
+	sb.WriteString("You previously reviewed this issue. Now you have seen your peer's analysis.\n")
+	sb.WriteString("- Consider their evidence and reasoning\n")
+	sb.WriteString("- Re-evaluate your position\n")
+	sb.WriteString("- You may change your verdict if their evidence is convincing\n")
+	sb.WriteString("- You may maintain your verdict if you find flaws in their reasoning\n\n")
+	sb.WriteString("RESPONSE FORMAT:\n")
+	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n\n")
+	sb.WriteString("Then provide:\n")
+	sb.WriteString("## Response to Peer\n")
+	sb.WriteString("<Address their key points>\n\n")
+	sb.WriteString("## Final Reasoning\n")
+	sb.WriteString("<Your updated analysis>\n")
+	return sb.String()
+}
+
+type verdictDecision struct {
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+}
+
+func buildVerdictPrompt(transcript string) string {
+	var sb strings.Builder
+	sb.WriteString("You are analyzing an agent transcript from a PR verification workflow.\n")
+	sb.WriteString("Determine whether the agent ultimately CONFIRMED the reported issue or REJECTED it.\n\n")
+	sb.WriteString("Transcript:\n<<<TRANSCRIPT>>>\n")
+	sb.WriteString(transcript)
+	sb.WriteString("\n<<<END TRANSCRIPT>>>\n\n")
+	sb.WriteString("Reply ONLY JSON: {\"verdict\":\"confirmed|rejected\",\"reason\":\"<original explanation>\"}.\n")
+	sb.WriteString("Use \"confirmed\" only if the agent clearly states the issue is real and provides evidence.\n")
+	sb.WriteString("Otherwise return \"rejected\".\n")
+	return sb.String()
+}
+
+func parseVerdictDecision(raw string) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return consensusVerdict{}, errors.New("empty consensus response")
+		return "", errors.New("empty verdict response")
 	}
 	jsonBlock := extractJSONBlock(trimmed)
-	var verdict consensusVerdict
-	if err := json.Unmarshal([]byte(jsonBlock), &verdict); err != nil {
-		return consensusVerdict{}, err
+	var decision verdictDecision
+	if err := json.Unmarshal([]byte(jsonBlock), &decision); err != nil {
+		return "", err
 	}
-	return verdict, nil
+	verdict := strings.ToLower(strings.TrimSpace(decision.Verdict))
+	switch verdict {
+	case "confirmed", "rejected":
+		return verdict, nil
+	default:
+		return "", fmt.Errorf("invalid verdict %q", decision.Verdict)
+	}
 }
 
 func extractJSONBlock(raw string) string {
