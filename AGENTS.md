@@ -3,7 +3,8 @@
 `dev_agent` orchestrates work through two single-turn specialists— **Codex** or **Claude Code** (builder) and **review_code** (critic)—to enforce an auditable TDD loop. Every turn produces a new Pantheon branch, so branch lineage is strictly linear and each agent receives a complete prompt (task, phase goals, context).
 
 ## Workflow Reference
-- **Turn order**: Codex (implement) → review_code → Codex (fix) → … until review_code reports success. The orchestrator stops after 8 review cycles or when the critic signs off.
+- **Turn order**: Codex or Claude Code (implement) → review_code → Codex or Claude Code (fix) → … until review_code reports success. The orchestrator stops after 8 review cycles or when the critic signs off.
+- **Builder agents**: `codex` and `claude_code` are both valid builder agent names; select based on task requirements.
 - **Single-call discipline**: Only one `execute_agent` runs per assistant turn because the next call must inherit the previous `branch_id`.
 - **Artifacts drive the loop**:
   - `worklog.md` (at `WORKSPACE_DIR/worklog.md`) stores Phase 0 notes, designs, implementation summaries, fix summaries, and test results.

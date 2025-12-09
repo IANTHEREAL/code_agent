@@ -9,7 +9,7 @@ Launches a specialist agent (`codex` or `review_code`) via `parallel_explore`. E
 ### Arguments
 | Field | Required | Description |
 |-------|----------|-------------|
-| `agent` | ✓ | `codex` (builder) or `review_code` (critic). |
+| `agent` | ✓ | `codex` (builder), `claude_code` (builder), or `review_code` (critic). |
 | `prompt` | ✓ | Complete single-turn instruction (task, phase goals, local context). |
 | `project_name` | ✓ | Pantheon project to operate in. Defaults to CLI `--project-name` if omitted. |
 | `parent_branch_id` | ✓ | Branch UUID to fork from. Must be the previous step’s `branch_id`. |
