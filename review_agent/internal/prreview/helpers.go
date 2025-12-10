@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+const (
+	verdictConfirmed = "CONFIRMED"
+	verdictRejected  = "REJECTED"
+)
+
 func buildReviewPrompt(task string) string {
 	var sb strings.Builder
 	sb.WriteString("You are running review_code on a GitHub PR.\n\n")
@@ -19,81 +24,64 @@ func buildReviewPrompt(task string) string {
 	return sb.String()
 }
 
-func buildVerifierPrompt(label, task string, issueText string, peerTranscript string, round int) string {
+func buildReviewerPrompt(task, issueText string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Verification Task: %s\n\n", label))
+	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n\n")
 	sb.WriteString("Task / PR context:\n")
-	sb.WriteString(task)
+	sb.WriteString(strings.TrimSpace(task))
 	sb.WriteString("\n\nIssue under review:\n")
-	sb.WriteString(issueText)
-	sb.WriteString("\n\n")
-	sb.WriteString("GOAL: Determine if this is a valid, critical bug through multi-perspective analysis.\n\n")
-	sb.WriteString("SIMULATION FRAMEWORK:\n")
-	sb.WriteString("Simulate a panel discussion between three experts examining this issue:\n\n")
-	sb.WriteString("1. **The Skeptic** - Assumes the current code is correct. Asks:\n")
-	sb.WriteString("   - What architectural constraint might justify this behavior?\n")
-	sb.WriteString("   - What would break if we 'fixed' this?\n")
-	sb.WriteString("   - Is the reporter misunderstanding the design?\n\n")
-	sb.WriteString("2. **The Detective** - Follows evidence trails. Asks:\n")
-	sb.WriteString("   - What does the actual running code do? (not what we assume)\n")
-	sb.WriteString("   - Can we trace the execution path?\n")
-	sb.WriteString("   - What do the real error messages say?\n\n")
-	sb.WriteString("3. **The Adversary** - Challenges all claims. Asks:\n")
-	sb.WriteString("   - Is this evidence based on real behavior or fabricated mocks?\n")
-	sb.WriteString("   - Does the test actually prove what it claims?\n")
-	sb.WriteString("   - What alternative explanations exist?\n\n")
-	sb.WriteString("EVIDENCE STANDARDS:\n")
-	sb.WriteString("What counts as valid evidence:\n")
-	sb.WriteString("✓ Actual error messages from running the real system\n")
-	sb.WriteString("✓ Code traces showing execution paths\n")
-	sb.WriteString("✓ Git history revealing design intent\n")
-	sb.WriteString("✓ Test results from real system components\n\n")
-	sb.WriteString("What does NOT count:\n")
-	sb.WriteString("✗ Mock behavior you created for the test\n")
-	sb.WriteString("✗ Assumptions about what 'should' happen\n")
-	sb.WriteString("✗ Documentation without code verification\n")
-	sb.WriteString("✗ 'This looks wrong' intuitions\n\n")
-	sb.WriteString("VERIFICATION PROCESS:\n")
-	sb.WriteString("1. What would the Skeptic say about the reporter's claim?\n")
-	sb.WriteString("2. What evidence would the Detective gather to test it?\n")
-	sb.WriteString("3. How would the Adversary challenge that evidence?\n")
-	sb.WriteString("4. After this adversarial examination, what's left standing?\n\n")
+	sb.WriteString(strings.TrimSpace(issueText))
+	sb.WriteString("\n\nTheir task:\n")
+	sb.WriteString("- Analyze the code logic for correctness.\n")
+	sb.WriteString("- Check for edge cases and error handling regressions.\n")
+	sb.WriteString("- Understand the architectural intent (Chesterton's Fence) before proposing fixes.\n")
+	sb.WriteString("- Identify potential design issues and safety hazards.\n\n")
+	sb.WriteString("Evidence standards:\n")
+	sb.WriteString("✓ Actual code paths, control-flow diagrams, concrete inputs/outputs.\n")
+	sb.WriteString("✓ Git history or specs that prove intent.\n")
+	sb.WriteString("✗ Fabricated mocks, \"should\" statements, or gut feelings.\n\n")
+	sb.WriteString("Response format:\n")
+	sb.WriteString("# VERDICT: CONFIRMED | REJECTED\n")
+	sb.WriteString("Provide structured reasoning with Issue Location, Problem Summary, Root Cause, Impact, and Suggested Fix (or Architectural Intent/Evidence for REJECTED).\n")
+	return sb.String()
+}
 
-	// Round-specific guidance
-	if round == 1 {
-		sb.WriteString("This is Round 1. Independently verify the issue.\n\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("This is Round %d. Build on or challenge prior work.\n\n", round))
-	}
+func buildTesterPrompt(task, issueText string) string {
+	var sb strings.Builder
+	sb.WriteString("Simulate a QA engineer who reproduces issues by running code.\n\n")
+	sb.WriteString("Task / PR context:\n")
+	sb.WriteString(strings.TrimSpace(task))
+	sb.WriteString("\n\nIssue under review:\n")
+	sb.WriteString(strings.TrimSpace(issueText))
+	sb.WriteString("\n\nTheir task:\n")
+	sb.WriteString("- Attempt to reproduce the reported issue end-to-end.\n")
+	sb.WriteString("- Write and run a minimal failing test or command sequence.\n")
+	sb.WriteString("- Trace actual execution paths and capture stack traces or logs.\n")
+	sb.WriteString("- Collect real error messages (no assumptions or mocked output).\n\n")
+	sb.WriteString("Output expectations:\n")
+	sb.WriteString("# VERDICT: CONFIRMED (with test evidence) | REJECTED (could not reproduce)\n")
+	sb.WriteString("Include concrete commands/tests that were run, the observed output, and why it proves or disproves the issue.\n")
+	return sb.String()
+}
 
-	if peerTranscript != "" {
-		sb.WriteString("Peer transcript (Previous Verifier's Work):\n<<<PEER>>>\n")
-		sb.WriteString(peerTranscript)
-		sb.WriteString("\n<<<END PEER>>>\n")
-		sb.WriteString("Critique the peer's reasoning. Did they miss the architectural intent? Did they fabricate evidence? Did they propose an unsafe fix?\n\n")
-	}
-
-	sb.WriteString("RESPONSE FORMAT:\n")
-	sb.WriteString("Start with an explicit verdict:\n")
-	sb.WriteString("  # VERDICT: [CONFIRMED | REJECTED]\n\n")
-	sb.WriteString("If CONFIRMED, use this EXACT structure:\n")
-	sb.WriteString("  ## <Short Title>\n\n")
-	sb.WriteString("  ### Issue Location\n")
-	sb.WriteString("  `path/to/file:line` (can be multiple locations)\n\n")
-	sb.WriteString("  ### Problem Summary\n")
-	sb.WriteString("  <Concise description of what's wrong>\n\n")
-	sb.WriteString("  ### Root Cause Analysis\n")
-	sb.WriteString("  <Detailed trace through the code. Use tables, step-by-step lists, or code snippets to show the bug path.>\n\n")
-	sb.WriteString("  ### Impact\n")
-	sb.WriteString("  <What breaks? Wrong results, crash, performance, scope of affected queries/features.>\n\n")
-	sb.WriteString("  ### Suggested Fix\n")
-	sb.WriteString("  ```\n  // Code snippet in the project's language\n  ```\n\n")
-	sb.WriteString("If REJECTED, use this structure:\n")
-	sb.WriteString("  ## Why This Is Not A Bug\n\n")
-	sb.WriteString("  ### Architectural Intent\n")
-	sb.WriteString("  <Why the current code is correct. What did the reporter miss?>\n\n")
-	sb.WriteString("  ### Evidence\n")
-	sb.WriteString("  <Test results, documentation, or code analysis proving it's not a bug.>\n")
+func buildExchangePrompt(role, issueText, peerOpinion string) string {
+	var sb strings.Builder
+	sb.WriteString("Round 2: Exchange Opinions.\n")
+	sb.WriteString("You now have access to your peer's findings. Challenge them and reconcile differences.\n\n")
+	sb.WriteString("Role: ")
+	sb.WriteString(strings.TrimSpace(role))
+	sb.WriteString("\n\nIssue under review:\n")
+	sb.WriteString(strings.TrimSpace(issueText))
+	sb.WriteString("\n\nPeer Opinion:\n<<<PEER_OPINION>>>\n")
+	sb.WriteString(strings.TrimSpace(peerOpinion))
+	sb.WriteString("\n<<<END_PEER_OPINION>>>\n\n")
+	sb.WriteString("Instructions:\n")
+	sb.WriteString("- Identify where your peer's reasoning strengthens or weakens your prior position.\n")
+	sb.WriteString("- Resolve contradictions with real evidence (logs, stack traces, code references).\n")
+	sb.WriteString("- If evidence is inconclusive, prefer \"存疑不报\" (do not post).\n\n")
+	sb.WriteString("Return format:\n")
+	sb.WriteString("# VERDICT: CONFIRMED | REJECTED\n")
+	sb.WriteString("Provide revised reasoning that explains how the peer feedback changed (or reinforced) your conclusion.\n")
 	return sb.String()
 }
 
@@ -104,11 +92,11 @@ type consensusVerdict struct {
 
 func buildConsensusPrompt(issueText string, alpha Transcript, beta Transcript) string {
 	var sb strings.Builder
-	sb.WriteString("Compare the two codex transcripts below for the same issue.\n\n")
+	sb.WriteString("Compare the Reviewer and Tester transcripts below for the same issue.\n\n")
 	sb.WriteString(issueText)
-	sb.WriteString("\n\nTranscript A:\n")
+	sb.WriteString("\n\nReviewer Transcript:\n")
 	sb.WriteString(alpha.Text)
-	sb.WriteString("\n\nTranscript B:\n")
+	sb.WriteString("\n\nTester Transcript:\n")
 	sb.WriteString(beta.Text)
 	sb.WriteString("\n\nReply ONLY JSON: {\"agree\":true/false,\"explanation\":\"...\"}. agree=true only if both confirm the same defect and failing test.\n")
 	return sb.String()
@@ -125,6 +113,80 @@ func parseConsensus(raw string) (consensusVerdict, error) {
 		return consensusVerdict{}, err
 	}
 	return verdict, nil
+}
+
+func parseVerdictFromTranscript(text string) (string, error) {
+	content := strings.ToUpper(strings.TrimSpace(text))
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "# VERDICT:") {
+			verdict := strings.TrimSpace(strings.TrimPrefix(trimmed, "# VERDICT:"))
+			if isPromptVerdictLine(verdict) {
+				continue
+			}
+			switch {
+			case matchesQualifiedVerdict(verdict, verdictConfirmed):
+				return verdictConfirmed, nil
+			case matchesQualifiedVerdict(verdict, verdictRejected):
+				return verdictRejected, nil
+			case verdict == "":
+				return "", errors.New("empty verdict line")
+			default:
+				return "", fmt.Errorf("unknown verdict %q", verdict)
+			}
+		}
+	}
+	return "", errors.New("verdict marker not found")
+}
+
+func matchesQualifiedVerdict(line string, canonical string) bool {
+	if !strings.HasPrefix(line, canonical) {
+		return false
+	}
+	if len(line) == len(canonical) {
+		return true
+	}
+	remainder := strings.TrimSpace(line[len(canonical):])
+	if remainder == "" {
+		return true
+	}
+	switch remainder[0] {
+	case '(':
+		if len(remainder) < 2 || !strings.HasSuffix(remainder, ")") {
+			return false
+		}
+		inner := strings.TrimSpace(remainder[1 : len(remainder)-1])
+		return inner != ""
+	case '-', ':':
+		return strings.TrimSpace(remainder[1:]) != ""
+	default:
+		return false
+	}
+}
+
+func isPromptVerdictLine(line string) bool {
+	return strings.Contains(line, "|") &&
+		strings.Contains(line, verdictConfirmed) &&
+		strings.Contains(line, verdictRejected)
+}
+
+type roundOneOutcome struct {
+	NeedExchange bool
+	Status       string
+}
+
+func evaluateRoundOne(reviewer Transcript, tester Transcript, consensusAgree bool) roundOneOutcome {
+	switch {
+	case reviewer.Verdict == verdictRejected && tester.Verdict == verdictRejected:
+		return roundOneOutcome{NeedExchange: false, Status: commentUnresolved}
+	case reviewer.Verdict == verdictConfirmed && tester.Verdict == verdictConfirmed:
+		if consensusAgree {
+			return roundOneOutcome{NeedExchange: false, Status: commentConfirmed}
+		}
+		return roundOneOutcome{NeedExchange: true}
+	default:
+		return roundOneOutcome{NeedExchange: true}
+	}
 }
 
 func extractJSONBlock(raw string) string {
