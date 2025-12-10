@@ -70,6 +70,7 @@ func buildTesterPrompt(task string, issueText string) string {
 	sb.WriteString("<What you did to reproduce>\n\n")
 	sb.WriteString("## Test Evidence\n")
 	sb.WriteString("<Actual test output or error messages>\n")
+	sb.WriteString("If you reference a custom script or test, include the key command or code snippet so others can rerun it; evidence without reproduction detail is not credible.\n")
 	return sb.String()
 }
 

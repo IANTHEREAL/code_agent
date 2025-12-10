@@ -36,6 +36,7 @@ func TestBuildTesterPromptContainsRoleDirectives(t *testing.T) {
 		"MUST actually run code",
 		"Do NOT fabricate",
 		"VERDICT",
+		"include the key command or code snippet",
 	}
 	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
