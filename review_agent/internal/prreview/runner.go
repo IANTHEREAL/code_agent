@@ -243,8 +243,8 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	reviewerR2.Verdict = reviewerR2Verdict.Verdict
 	reviewerR2.VerdictReason = reviewerR2Verdict.Reason
 
-	// Tester sees Reviewer's opinion
-	testerR2, err := r.runExchange("tester", issueText, tester.Text, reviewer.Text, reviewerR2.BranchID)
+	// Tester sees Reviewer's updated opinion
+	testerR2, err := r.runExchange("tester", issueText, tester.Text, reviewerR2.Text, reviewerR2.BranchID)
 	if err != nil {
 		return IssueReport{}, err
 	}
