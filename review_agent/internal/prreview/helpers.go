@@ -8,6 +8,8 @@ import (
 )
 
 func buildIssueFinderPrompt(task string) string {
+	// NOTE: The Codex review flow expects this sentinel string to trigger its built-in
+	// prompt template; see https://github.com/openai/codex/issues/6432 for context.
 	return "base-branch main"
 }
 

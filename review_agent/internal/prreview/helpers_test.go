@@ -5,16 +5,11 @@ import (
 	"testing"
 )
 
-func TestBuildReviewPromptFocusesSingleCriticalIssue(t *testing.T) {
-	prompt := buildIssueFinderPrompt("https://github.com/org/repo/pull/42")
-	for _, needle := range []string{
-		"https://github.com/org/repo/pull/42",
-		"single most critical",
-		"P0/P1",
-	} {
-		if !strings.Contains(prompt, needle) {
-			t.Fatalf("prompt missing %q: %q", needle, prompt)
-		}
+func TestBuildReviewPromptUsesCodexSentinel(t *testing.T) {
+	// NOTE: buildIssueFinderPrompt intentionally returns the literal sentinel
+	// expected by Codex review (see https://github.com/openai/codex/issues/6432).
+	if got := buildIssueFinderPrompt("https://github.com/org/repo/pull/42"); got != "base-branch main" {
+		t.Fatalf("expected codex sentinel, got %q", got)
 	}
 }
 
