@@ -91,12 +91,15 @@ func TestBuildVerdictPromptContainsTranscript(t *testing.T) {
 
 func TestParseVerdictDecision(t *testing.T) {
 	raw := "```json\n{\"verdict\": \"confirmed\", \"reason\": \"explicit marker\"}\n```"
-	verdict, err := parseVerdictDecision(raw)
+	decision, err := parseVerdictDecision(raw)
 	if err != nil {
 		t.Fatalf("parseVerdictDecision error: %v", err)
 	}
-	if verdict != "confirmed" {
-		t.Fatalf("unexpected verdict: %s", verdict)
+	if decision.Verdict != "confirmed" {
+		t.Fatalf("unexpected verdict: %s", decision.Verdict)
+	}
+	if decision.Reason != "explicit marker" {
+		t.Fatalf("unexpected reason: %s", decision.Reason)
 	}
 
 	bad := "```json\n{\"verdict\": \"unknown\"}\n```"

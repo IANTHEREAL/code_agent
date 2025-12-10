@@ -136,22 +136,23 @@ func buildVerdictPrompt(transcript string) string {
 	return sb.String()
 }
 
-func parseVerdictDecision(raw string) (string, error) {
+func parseVerdictDecision(raw string) (verdictDecision, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return "", errors.New("empty verdict response")
+		return verdictDecision{}, errors.New("empty verdict response")
 	}
 	jsonBlock := extractJSONBlock(trimmed)
 	var decision verdictDecision
 	if err := json.Unmarshal([]byte(jsonBlock), &decision); err != nil {
-		return "", err
+		return verdictDecision{}, err
 	}
 	verdict := strings.ToLower(strings.TrimSpace(decision.Verdict))
 	switch verdict {
 	case "confirmed", "rejected":
-		return verdict, nil
+		decision.Verdict = verdict
+		return decision, nil
 	default:
-		return "", fmt.Errorf("invalid verdict %q", decision.Verdict)
+		return verdictDecision{}, fmt.Errorf("invalid verdict %q", decision.Verdict)
 	}
 }
 

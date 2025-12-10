@@ -47,10 +47,12 @@ type ReviewerLog struct {
 
 // Transcript records a codex agent's reasoning for an issue confirmation attempt.
 type Transcript struct {
-	Agent    string `json:"agent"`
-	Round    int    `json:"round"`
-	BranchID string `json:"branch_id,omitempty"`
-	Text     string `json:"text"`
+	Agent         string `json:"agent"`
+	Round         int    `json:"round"`
+	BranchID      string `json:"branch_id,omitempty"`
+	Text          string `json:"text"`
+	Verdict       string `json:"verdict,omitempty"`
+	VerdictReason string `json:"verdict_reason,omitempty"`
 }
 
 // IssueReport stores the consensus outcome for a single ISSUE block.
@@ -190,21 +192,22 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	if err != nil {
 		return IssueReport{}, err
 	}
-
-	tester, err := r.runRole("tester", issueText, reviewer.BranchID)
-	if err != nil {
-		return IssueReport{}, err
-	}
-
-	// Check Round 1 consensus
 	reviewerVerdict, err := r.determineVerdict(reviewer)
 	if err != nil {
 		return IssueReport{}, fmt.Errorf("reviewer verdict: %w", err)
+	}
+	reviewer.Verdict = reviewerVerdict.Verdict
+	reviewer.VerdictReason = reviewerVerdict.Reason
+	tester, err := r.runRole("tester", issueText, reviewer.BranchID)
+	if err != nil {
+		return IssueReport{}, err
 	}
 	testerVerdict, err := r.determineVerdict(tester)
 	if err != nil {
 		return IssueReport{}, fmt.Errorf("tester verdict: %w", err)
 	}
+	tester.Verdict = testerVerdict.Verdict
+	tester.VerdictReason = testerVerdict.Reason
 
 	report := IssueReport{
 		IssueText:      issueText,
@@ -214,8 +217,8 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	}
 
 	// If both agree in Round 1, we're done
-	if reviewerVerdict == testerVerdict {
-		if reviewerVerdict == "confirmed" {
+	if reviewerVerdict.Verdict == testerVerdict.Verdict {
+		if reviewerVerdict.Verdict == "confirmed" {
 			report.Status = commentConfirmed
 			report.VerdictExplanation = "Round 1: Both Reviewer and Tester confirmed the issue"
 		} else {
@@ -233,28 +236,30 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	if err != nil {
 		return IssueReport{}, err
 	}
+	reviewerR2Verdict, err := r.determineVerdict(reviewerR2)
+	if err != nil {
+		return IssueReport{}, fmt.Errorf("reviewer round 2 verdict: %w", err)
+	}
+	reviewerR2.Verdict = reviewerR2Verdict.Verdict
+	reviewerR2.VerdictReason = reviewerR2Verdict.Reason
 
 	// Tester sees Reviewer's opinion
 	testerR2, err := r.runExchange("tester", issueText, tester.Text, reviewer.Text, reviewerR2.BranchID)
 	if err != nil {
 		return IssueReport{}, err
 	}
+	testerR2Verdict, err := r.determineVerdict(testerR2)
+	if err != nil {
+		return IssueReport{}, fmt.Errorf("tester round 2 verdict: %w", err)
+	}
+	testerR2.Verdict = testerR2Verdict.Verdict
+	testerR2.VerdictReason = testerR2Verdict.Reason
 
 	// Update report with Round 2 results
 	report.Alpha = reviewerR2
 	report.Beta = testerR2
 
-	// Check Round 2 consensus
-	reviewerR2Verdict, err := r.determineVerdict(reviewerR2)
-	if err != nil {
-		return IssueReport{}, fmt.Errorf("reviewer round 2 verdict: %w", err)
-	}
-	testerR2Verdict, err := r.determineVerdict(testerR2)
-	if err != nil {
-		return IssueReport{}, fmt.Errorf("tester round 2 verdict: %w", err)
-	}
-
-	if reviewerR2Verdict == testerR2Verdict && reviewerR2Verdict == "confirmed" {
+	if reviewerR2Verdict.Verdict == testerR2Verdict.Verdict && reviewerR2Verdict.Verdict == "confirmed" {
 		report.Status = commentConfirmed
 		report.VerdictExplanation = "Round 2: Both agreed to confirm after exchange"
 	} else {
@@ -372,20 +377,20 @@ func (r *Runner) hasRealIssue(reportText string) (bool, error) {
 	return check.HasIssue, nil
 }
 
-func (r *Runner) determineVerdict(transcript Transcript) (string, error) {
+func (r *Runner) determineVerdict(transcript Transcript) (verdictDecision, error) {
 	prompt := buildVerdictPrompt(transcript.Text)
 	resp, err := r.brain.Complete([]b.ChatMessage{
 		{Role: "system", Content: "Classify verification transcripts as confirmed or rejected. Reply only with JSON."},
 		{Role: "user", Content: prompt},
 	}, nil)
 	if err != nil {
-		return "", err
+		return verdictDecision{}, err
 	}
-	verdict, err := parseVerdictDecision(resp.Choices[0].Message.Content)
+	decision, err := parseVerdictDecision(resp.Choices[0].Message.Content)
 	if err != nil {
-		return "", err
+		return verdictDecision{}, err
 	}
-	return verdict, nil
+	return decision, nil
 }
 
 type eventHelper struct {
