@@ -14,6 +14,11 @@ import (
 	"dev_agent/internal/logx"
 )
 
+const (
+	devAgentMetaKey   = "ai.tidb.pantheon-ai/agent"
+	devAgentMetaValue = "dev_agent"
+)
+
 type MCPError struct{ Msg string }
 
 func (e MCPError) Error() string { return e.Msg }
@@ -82,11 +87,22 @@ func (c *MCPClient) callWithRetries(method string, params map[string]any, timeou
 		maxRetries = 1
 	}
 	c.requestID++
+	paramsWithMeta := params
+	if method == "tools/call" {
+		paramsWithMeta = cloneMap(params)
+		var existingMeta map[string]any
+		if meta, ok := paramsWithMeta["_meta"].(map[string]any); ok && meta != nil {
+			existingMeta = meta
+		}
+		metaCopy := cloneMap(existingMeta)
+		metaCopy[devAgentMetaKey] = devAgentMetaValue
+		paramsWithMeta["_meta"] = metaCopy
+	}
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      c.requestID,
 		"method":  method,
-		"params":  params,
+		"params":  paramsWithMeta,
 	}
 	var lastErr error
 
@@ -324,6 +340,17 @@ func extractJSONFromText(text string) ([]byte, error) {
 		return nil, fmt.Errorf("decoded empty JSON")
 	}
 	return raw, nil
+}
+
+func cloneMap(src map[string]any) map[string]any {
+	if src == nil {
+		return map[string]any{}
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func min(a, b int) int {
