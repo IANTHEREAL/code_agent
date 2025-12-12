@@ -10,6 +10,9 @@ import (
 	"time"
 )
 
+const minPollTimeoutSeconds = 1800
+const minPollTimeout = time.Duration(minPollTimeoutSeconds) * time.Second
+
 type AgentConfig struct {
 	AzureAPIKey       string
 	AzureEndpoint     string
@@ -72,12 +75,15 @@ func FromEnv() (AgentConfig, error) {
 	if err != nil {
 		return AgentConfig{}, err
 	}
-	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", 600)
+	pollTimeout, err := envSeconds("MCP_POLL_TIMEOUT_SECONDS", minPollTimeoutSeconds)
 	if err != nil {
 		return AgentConfig{}, err
 	}
 	if pollInitial >= pollMax {
 		return AgentConfig{}, errors.New("MCP_POLL_INITIAL_SECONDS must be less than MCP_POLL_MAX_SECONDS")
+	}
+	if pollTimeout < minPollTimeout {
+		pollTimeout = minPollTimeout
 	}
 	if pollTimeout <= pollMax {
 		return AgentConfig{}, errors.New("MCP_POLL_TIMEOUT_SECONDS must be greater than MCP_POLL_MAX_SECONDS")
