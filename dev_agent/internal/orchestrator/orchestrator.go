@@ -43,6 +43,7 @@ Never hard-code absolute filesystem paths; derive locations relative to the repo
 #### Implement (codex)
 
 You are an expert engineer. Your goal is to produce high-quality, verified code based on deep analysis.
+Before you start coding: Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.
 
 **User Task**: [The user's original task description - must be passed on exactly as is]
 
@@ -59,6 +60,7 @@ You are an expert engineer. Your goal is to produce high-quality, verified code 
 
 
 2.  **Phase 1: Analysis & Design** (Only if Phase 0 passes)
+	* Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.
     * **Analyze**:
         * **For Bugs**: Perform Root Cause Analysis (RCA). Locate the code causing the issue.
         * **For Features**: Identify all code paths and files that need modification.
