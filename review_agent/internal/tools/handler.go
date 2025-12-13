@@ -253,8 +253,12 @@ func (h *ToolHandler) executeReviewAgent(project, parent, prompt string) (map[st
 	if lastBranch != "" {
 		details["last_branch_id"] = lastBranch
 	}
+	msg := fmt.Sprintf("review_code failed to produce %s after %d attempts", artifactPath, reviewMaxAttempts)
+	if lastBranch != "" {
+		msg = fmt.Sprintf("%s (last_branch_id=%s). Inspect manifest %s in Pantheon.", msg, lastBranch, lastBranch)
+	}
 	return nil, ToolExecutionError{
-		Msg:         fmt.Sprintf("review_code failed to produce %s after %d attempts", artifactPath, reviewMaxAttempts),
+		Msg:         msg,
 		Instruction: instructionFinishedWithErr,
 		Details:     details,
 	}
@@ -333,21 +337,32 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 			}
 		}
 
-		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
-		if hasNewSnapshot && (status == "succeed" || status == "failed" || status == "manifesting") {
-			if status == "failed" {
-				details := map[string]any{"status": status}
-				if branchID := ExtractBranchID(resp); branchID != "" {
-					details["branch_id"] = branchID
+			logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
+			if hasNewSnapshot && (status == "succeed" || status == "failed" || status == "manifesting") {
+				if status == "failed" {
+					details := map[string]any{"status": status}
+					if branchID := ExtractBranchID(resp); branchID != "" {
+						details["branch_id"] = branchID
+					}
+					excerpt := ""
+					if outResp, err := h.client.BranchOutput(branchID, true); err == nil {
+						excerpt = strings.TrimSpace(branchOutputString(outResp))
+						if len(excerpt) > 400 {
+							excerpt = excerpt[:400] + "..."
+						}
+					}
+					msg := fmt.Sprintf("Branch %s reported failed status. Inspect manifest %s in Pantheon.", branchID, branchID)
+					if excerpt != "" {
+						msg = fmt.Sprintf("Branch %s reported failed status: %s. Inspect manifest %s in Pantheon.", branchID, excerpt, branchID)
+					}
+					return nil, ToolExecutionError{
+						Msg:         msg,
+						Instruction: instructionFinishedWithErr,
+						Details:     details,
+					}
 				}
-				return nil, ToolExecutionError{
-					Msg:         fmt.Sprintf("Branch %s reported failed status", branchID),
-					Instruction: instructionFinishedWithErr,
-					Details:     details,
-				}
+				return resp, nil
 			}
-			return resp, nil
-		}
 		if time.Now().After(deadline) {
 			return nil, ToolExecutionError{
 				Msg:         fmt.Sprintf("Timed out waiting for branch %s (last status=%s)", branchID, status),
