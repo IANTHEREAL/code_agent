@@ -90,6 +90,9 @@ func TestExecuteAgentReviewCodeFailsAfterMaxAttempts(t *testing.T) {
 	if te.Details["attempts"] != 3 {
 		t.Fatalf("expected attempts=3 in details, got %#v", te.Details["attempts"])
 	}
+	if !strings.Contains(te.Msg, "branch-3") {
+		t.Fatalf("expected error message to mention last branch id, got %q", te.Msg)
+	}
 }
 
 func TestHandleBranchOutputRequiresBranchID(t *testing.T) {

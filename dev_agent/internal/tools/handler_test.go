@@ -91,6 +91,9 @@ func TestExecuteAgentReviewCodeFailsAfterMaxAttempts(t *testing.T) {
 	if te.Details["attempts"] != 3 {
 		t.Fatalf("expected attempts=3 in details, got %#v", te.Details["attempts"])
 	}
+	if !strings.Contains(te.Msg, "branch-3") {
+		t.Fatalf("expected error message to mention last branch id, got %q", te.Msg)
+	}
 }
 
 func TestHandleBranchOutputRequiresBranchID(t *testing.T) {
@@ -268,6 +271,39 @@ func TestCheckStatusTimeoutUsesConfiguredDefaults(t *testing.T) {
 		if clock.sleeps[i] != d {
 			t.Fatalf("sleep[%d]=%s, want %s; recorded sleeps=%v", i, clock.sleeps[i], d, clock.sleeps)
 		}
+	}
+}
+
+func TestCheckStatusFailedIncludesBranchOutputAndManifestHint(t *testing.T) {
+	client := &fakeMCPClient{
+		getBranchResults: []branchStatusResult{
+			{resp: map[string]any{"id": "branch-123", "status": "failed"}},
+		},
+		branchOutputResult: map[string]any{"output": "Traceback: boom\nmore"},
+	}
+	handler := &ToolHandler{
+		client:        client,
+		branchTracker: NewBranchTracker("parent"),
+		nowFunc:       time.Now,
+		sleepFunc:     func(time.Duration) {},
+	}
+
+	_, err := handler.checkStatus(map[string]any{"branch_id": "branch-123"})
+	if err == nil {
+		t.Fatalf("expected failure error, got nil")
+	}
+	var te ToolExecutionError
+	if !errors.As(err, &te) {
+		t.Fatalf("expected ToolExecutionError, got %T", err)
+	}
+	if te.Instruction != "FINISHED_WITH_ERROR" {
+		t.Fatalf("expected FINISHED_WITH_ERROR instruction, got %q", te.Instruction)
+	}
+	if !strings.Contains(te.Msg, "Traceback: boom") {
+		t.Fatalf("expected message to include branch output excerpt, got %q", te.Msg)
+	}
+	if !strings.Contains(te.Msg, "Inspect manifest branch-123") {
+		t.Fatalf("expected message to include manifest hint, got %q", te.Msg)
 	}
 }
 

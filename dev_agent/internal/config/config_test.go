@@ -60,4 +60,3 @@ func TestFromEnv_RespectsLargerPollTimeout(t *testing.T) {
 		t.Fatalf("expected PollTimeout 1h, got %s", conf.PollTimeout)
 	}
 }
-
