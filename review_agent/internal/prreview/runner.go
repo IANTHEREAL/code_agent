@@ -14,20 +14,18 @@ import (
 )
 
 const (
-	statusClean         = "clean"
-	statusIssues        = "issues_found"
-	commentConfirmed    = "confirmed"
-	commentUnresolved   = "unresolved"
-	defaultMaxExchanges = 1
+	statusClean       = "clean"
+	statusIssues      = "issues_found"
+	commentConfirmed  = "confirmed"
+	commentUnresolved = "unresolved"
 )
 
 // Options configures the PR review workflow.
 type Options struct {
-	Task            string
-	ProjectName     string
-	ParentBranchID  string
-	WorkspaceDir    string
-	MaxExchangeRuns int
+	Task           string
+	ProjectName    string
+	ParentBranchID string
+	WorkspaceDir   string
 }
 
 // Result captures the high-level outcome plus supporting artifacts.
@@ -49,10 +47,12 @@ type ReviewerLog struct {
 
 // Transcript records a codex agent's reasoning for an issue confirmation attempt.
 type Transcript struct {
-	Agent    string `json:"agent"`
-	Round    int    `json:"round"`
-	BranchID string `json:"branch_id,omitempty"`
-	Text     string `json:"text"`
+	Agent         string `json:"agent"`
+	Round         int    `json:"round"`
+	BranchID      string `json:"branch_id,omitempty"`
+	Text          string `json:"text"`
+	Verdict       string `json:"verdict,omitempty"`
+	VerdictReason string `json:"verdict_reason,omitempty"`
 }
 
 // IssueReport stores the consensus outcome for a single ISSUE block.
@@ -72,6 +72,9 @@ type Runner struct {
 	opts     Options
 	streamer *streaming.JSONStreamer
 	events   *eventHelper
+
+	// alignmentOverride is a test hook to avoid network calls while exercising confirmIssue logic.
+	alignmentOverride func(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error)
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -94,9 +97,6 @@ func NewRunner(brain *b.LLMBrain, handler *t.ToolHandler, streamer *streaming.JS
 	}
 	if opts.ParentBranchID == "" {
 		return nil, errors.New("parent branch id is required")
-	}
-	if opts.MaxExchangeRuns <= 0 {
-		opts.MaxExchangeRuns = defaultMaxExchanges
 	}
 	return &Runner{
 		brain:    brain,
@@ -171,7 +171,7 @@ func (r *Runner) attachBranchRange(res *Result) {
 }
 
 func (r *Runner) runSingleReview() (ReviewerLog, error) {
-	prompt := buildReviewPrompt(r.opts.Task)
+	prompt := buildIssueFinderPrompt(r.opts.Task)
 	data, err := r.executeAgent("review_code", prompt, r.opts.ParentBranchID)
 	if err != nil {
 		return ReviewerLog{}, err
@@ -188,70 +188,146 @@ func (r *Runner) runSingleReview() (ReviewerLog, error) {
 }
 
 func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueReport, error) {
-	// Linear chaining:
-	// Verifier Alpha starts from startBranchID (Reviewer's branch).
-	alpha, err := r.runVerifier("verifier-alpha", issueText, "", 1, startBranchID)
+	// V2 Flow: Reviewer + Tester with two-round unanimous consensus
+
+	// Round 1: Independent review
+	reviewer, err := r.runRole("reviewer", issueText, startBranchID)
 	if err != nil {
 		return IssueReport{}, err
 	}
-
-	// Verifier Beta starts from Alpha's branch.
-	beta, err := r.runVerifier("verifier-beta", issueText, "", 1, alpha.BranchID)
+	reviewerVerdict, err := r.determineVerdict(reviewer)
+	if err != nil {
+		return IssueReport{}, fmt.Errorf("reviewer verdict: %w", err)
+	}
+	reviewer.Verdict = reviewerVerdict.Verdict
+	reviewer.VerdictReason = reviewerVerdict.Reason
+	tester, err := r.runRole("tester", issueText, reviewer.BranchID)
 	if err != nil {
 		return IssueReport{}, err
 	}
-
-	verdict, err := r.checkConsensus(issueText, alpha, beta)
+	testerVerdict, err := r.determineVerdict(tester)
 	if err != nil {
-		return IssueReport{}, err
+		return IssueReport{}, fmt.Errorf("tester verdict: %w", err)
 	}
-
-	exchanges := 0
-	for !verdict.Agree && exchanges < r.opts.MaxExchangeRuns {
-		exchanges++
-		// Continue the chain
-		// Alpha starts from Beta's branch
-		alpha, err = r.runVerifier("verifier-alpha", issueText, beta.Text, alpha.Round+1, beta.BranchID)
-		if err != nil {
-			return IssueReport{}, err
-		}
-		// Beta starts from Alpha's (new) branch
-		beta, err = r.runVerifier("verifier-beta", issueText, alpha.Text, beta.Round+1, alpha.BranchID)
-		if err != nil {
-			return IssueReport{}, err
-		}
-		verdict, err = r.checkConsensus(issueText, alpha, beta)
-		if err != nil {
-			return IssueReport{}, err
-		}
-	}
+	tester.Verdict = testerVerdict.Verdict
+	tester.VerdictReason = testerVerdict.Reason
 
 	report := IssueReport{
-		IssueText:          issueText,
-		Alpha:              alpha,
-		Beta:               beta,
-		ExchangeRounds:     exchanges,
-		VerdictExplanation: verdict.Explanation,
+		IssueText:      issueText,
+		Alpha:          reviewer,
+		Beta:           tester,
+		ExchangeRounds: 0,
 	}
-	if verdict.Agree {
-		report.Status = commentConfirmed
-	} else {
+
+	// Round 1 short-circuit:
+	// - If both reject: unresolved
+	// - If both confirm: require cross-transcript alignment before confirming
+	if reviewerVerdict.Verdict == testerVerdict.Verdict && reviewerVerdict.Verdict == "rejected" {
 		report.Status = commentUnresolved
+		report.VerdictExplanation = "Round 1: Both Reviewer and Tester rejected the issue"
+		return report, nil
 	}
+	if reviewerVerdict.Verdict == testerVerdict.Verdict && reviewerVerdict.Verdict == "confirmed" {
+		aligned, err := r.checkAlignment(issueText, reviewer, tester)
+		if err != nil {
+			return IssueReport{}, err
+		}
+		if aligned.Agree {
+			report.Status = commentConfirmed
+			report.VerdictExplanation = fmt.Sprintf("Round 1: Both confirmed and aligned: %s", strings.TrimSpace(aligned.Explanation))
+			return report, nil
+		}
+		// If both confirmed but did not align on the same defect, do NOT confirm; proceed to exchange.
+	}
+
+	// Round 2: Exchange opinions
+	report.ExchangeRounds = 1
+
+	// Reviewer sees Tester's opinion
+	reviewerR2, err := r.runExchange("reviewer", issueText, reviewer.Text, tester.Text, tester.BranchID)
+	if err != nil {
+		return IssueReport{}, err
+	}
+	reviewerR2Verdict, err := r.determineVerdict(reviewerR2)
+	if err != nil {
+		return IssueReport{}, fmt.Errorf("reviewer round 2 verdict: %w", err)
+	}
+	reviewerR2.Verdict = reviewerR2Verdict.Verdict
+	reviewerR2.VerdictReason = reviewerR2Verdict.Reason
+
+	// Tester sees Reviewer's updated opinion
+	testerR2, err := r.runExchange("tester", issueText, tester.Text, reviewerR2.Text, reviewerR2.BranchID)
+	if err != nil {
+		return IssueReport{}, err
+	}
+	testerR2Verdict, err := r.determineVerdict(testerR2)
+	if err != nil {
+		return IssueReport{}, fmt.Errorf("tester round 2 verdict: %w", err)
+	}
+	testerR2.Verdict = testerR2Verdict.Verdict
+	testerR2.VerdictReason = testerR2Verdict.Reason
+
+	// Update report with Round 2 results
+	report.Alpha = reviewerR2
+	report.Beta = testerR2
+
+	if reviewerR2Verdict.Verdict == testerR2Verdict.Verdict && reviewerR2Verdict.Verdict == "confirmed" {
+		aligned, err := r.checkAlignment(issueText, reviewerR2, testerR2)
+		if err != nil {
+			return IssueReport{}, err
+		}
+		if aligned.Agree {
+			report.Status = commentConfirmed
+			report.VerdictExplanation = fmt.Sprintf("Round 2: Both confirmed and aligned: %s", strings.TrimSpace(aligned.Explanation))
+			return report, nil
+		}
+		// Both say confirmed, but not aligned => unresolved (存疑不报).
+		report.Status = commentUnresolved
+		report.VerdictExplanation = fmt.Sprintf("Round 2: Confirmed but misaligned (存疑不报): %s", strings.TrimSpace(aligned.Explanation))
+		return report, nil
+	}
+
+	// 存疑不报: If still no unanimous confirmation, don't post
+	report.Status = commentUnresolved
+	report.VerdictExplanation = "Round 2: No unanimous confirmation (存疑不报)"
+
 	return report, nil
 }
 
-func (r *Runner) runVerifier(label string, issueText string, peerTranscript string, round int, parentBranchID string) (Transcript, error) {
-	prompt := buildVerifierPrompt(label, r.opts.Task, issueText, peerTranscript, round)
-	// Select agent: use codex-claude for verifier-beta, codex for others
+// runRole executes a role-based verification (Reviewer or Tester).
+func (r *Runner) runRole(role string, issueText string, parentBranchID string) (Transcript, error) {
+	var prompt string
+	if role == "reviewer" {
+		prompt = buildLogicAnalystPrompt(r.opts.Task, issueText)
+	} else {
+		prompt = buildTesterPrompt(r.opts.Task, issueText)
+	}
+
 	agent := "codex"
 	data, err := r.executeAgent(agent, prompt, parentBranchID)
 	if err != nil {
 		return Transcript{}, err
 	}
 	return Transcript{
-		Agent:    label,
-		Round:    round,
+		Agent:    role,
+		Round:    1,
+		BranchID: stringField(data, "branch_id"),
+		Text:     strings.TrimSpace(stringField(data, "response")),
+	}, nil
+}
+
+// runExchange executes Round 2 with both the agent's and peer's opinions.
+func (r *Runner) runExchange(role string, issueText string, selfOpinion string, peerOpinion string, parentBranchID string) (Transcript, error) {
+	prompt := buildExchangePrompt(role, r.opts.Task, issueText, selfOpinion, peerOpinion)
+
+	agent := "codex"
+	data, err := r.executeAgent(agent, prompt, parentBranchID)
+	if err != nil {
+		return Transcript{}, err
+	}
+	return Transcript{
+		Agent:    role,
+		Round:    2,
 		BranchID: stringField(data, "branch_id"),
 		Text:     strings.TrimSpace(stringField(data, "response")),
 	}, nil
@@ -324,16 +400,49 @@ func (r *Runner) hasRealIssue(reportText string) (bool, error) {
 	return check.HasIssue, nil
 }
 
-func (r *Runner) checkConsensus(issueText string, alpha Transcript, beta Transcript) (consensusVerdict, error) {
-	prompt := buildConsensusPrompt(issueText, alpha, beta)
+func (r *Runner) determineVerdict(transcript Transcript) (verdictDecision, error) {
+	// 1. Try to extract explicit verdict from regex
+	if decision, ok := extractTranscriptVerdict(transcript.Text); ok {
+		logx.Infof("Parsed explicit verdict for %s (Round %d): %s", transcript.Agent, transcript.Round, decision.Verdict)
+		return decision, nil
+	}
+
+	// No LLM fallback: missing explicit marker => reject (conservative).
+	return verdictDecision{
+		Verdict: "rejected",
+		Reason:  "missing explicit transcript verdict marker",
+	}, nil
+}
+
+func (r *Runner) checkAlignment(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error) {
+	if r.alignmentOverride != nil {
+		return r.alignmentOverride(issueText, alpha, beta)
+	}
+	if r.brain == nil {
+		return alignmentVerdict{}, errors.New("brain is required for alignment check")
+	}
+	prompt := buildAlignmentPrompt(issueText, alpha, beta)
 	resp, err := r.brain.Complete([]b.ChatMessage{
-		{Role: "system", Content: "Return JSON verdicts comparing codex transcripts. Always reply as JSON."},
+		{Role: "system", Content: "Return JSON alignment verdicts for two transcripts. Reply only with JSON."},
 		{Role: "user", Content: prompt},
 	}, nil)
 	if err != nil {
-		return consensusVerdict{}, err
+		return alignmentVerdict{}, err
 	}
-	return parseConsensus(resp.Choices[0].Message.Content)
+	content := ""
+	if resp != nil && len(resp.Choices) > 0 {
+		content = resp.Choices[0].Message.Content
+	}
+	if strings.TrimSpace(content) == "" {
+		logx.Errorf("Alignment LLM returned empty content (issue=%q)", streaming.PromptPreview(issueText))
+		return alignmentVerdict{}, errors.New("alignment returned empty content")
+	}
+	verdict, err := parseAlignment(content)
+	if err != nil {
+		logx.Errorf("Alignment parse failed: %v. Raw response=%q", err, content)
+		return alignmentVerdict{}, err
+	}
+	return verdict, nil
 }
 
 type eventHelper struct {
