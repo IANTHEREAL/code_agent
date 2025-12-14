@@ -378,6 +378,13 @@ func (r *Runner) hasRealIssue(reportText string) (bool, error) {
 }
 
 func (r *Runner) determineVerdict(transcript Transcript) (verdictDecision, error) {
+	// 1. Try to extract explicit verdict from regex
+	if decision, ok := extractTranscriptVerdict(transcript.Text); ok {
+		logx.Infof("Parsed explicit verdict for %s (Round %d): %s", transcript.Agent, transcript.Round, decision.Verdict)
+		return decision, nil
+	}
+
+	// 2. Fallback to LLM judgment
 	prompt := buildVerdictPrompt(transcript.Text)
 	resp, err := r.brain.Complete([]b.ChatMessage{
 		{Role: "system", Content: "Classify verification transcripts as confirmed or rejected. Reply only with JSON."},

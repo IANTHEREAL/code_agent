@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -133,6 +134,34 @@ func buildExchangePrompt(role string, task string, issueText string, selfOpinion
 type verdictDecision struct {
 	Verdict string `json:"verdict"`
 	Reason  string `json:"reason"`
+}
+
+var verdictLineRe = regexp.MustCompile(`(?i)^\s*#?\s*verdict\s*:\s*\[?\s*(confirmed|rejected)\s*\]?\s*$`)
+
+func extractTranscriptVerdict(transcript string) (verdictDecision, bool) {
+	lines := strings.Split(transcript, "\n")
+	limit := 10
+	if len(lines) < limit {
+		limit = len(lines)
+	}
+	for i := 0; i < limit; i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, ">") {
+			continue
+		}
+		matches := verdictLineRe.FindStringSubmatch(line)
+		if len(matches) != 2 {
+			continue
+		}
+		return verdictDecision{
+			Verdict: strings.ToLower(strings.TrimSpace(matches[1])),
+			Reason:  "explicit transcript verdict marker",
+		}, true
+	}
+	return verdictDecision{}, false
 }
 
 func buildVerdictPrompt(transcript string) string {

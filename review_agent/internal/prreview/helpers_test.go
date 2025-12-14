@@ -119,3 +119,60 @@ func TestParseVerdictDecision(t *testing.T) {
 		t.Fatal("expected error for invalid verdict")
 	}
 }
+
+func TestExtractTranscriptVerdict(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		want     string
+		wantFind bool
+	}{
+		{
+			name:     "confirmed marker",
+			input:    "# VERDICT: CONFIRMED\n\n## Reasoning\nok",
+			want:     "confirmed",
+			wantFind: true,
+		},
+		{
+			name:     "rejected marker lower-case",
+			input:    "   # verdict: rejected\nDetails...",
+			want:     "rejected",
+			wantFind: true,
+		},
+		{
+			name:     "bracketed marker",
+			input:    "# VERDICT: [CONFIRMED]\nEvidence",
+			want:     "confirmed",
+			wantFind: true,
+		},
+		{
+			name:     "ignores quoted marker",
+			input:    "> # VERDICT: CONFIRMED\n\nNo explicit marker here",
+			want:     "",
+			wantFind: false,
+		},
+		{
+			name:     "no marker",
+			input:    "I think this is a bug but forgot the header",
+			want:     "",
+			wantFind: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, ok := extractTranscriptVerdict(tc.input)
+			if ok != tc.wantFind {
+				t.Fatalf("expected found=%v, got %v (decision=%+v)", tc.wantFind, ok, decision)
+			}
+			if !ok {
+				return
+			}
+			if decision.Verdict != tc.want {
+				t.Fatalf("expected verdict %q, got %q", tc.want, decision.Verdict)
+			}
+			if decision.Reason == "" {
+				t.Fatalf("expected non-empty reason")
+			}
+		})
+	}
+}
