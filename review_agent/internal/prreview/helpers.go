@@ -2,7 +2,6 @@ package prreview
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -36,6 +35,11 @@ func buildLogicAnalystPrompt(task string, issueText string) string {
 	sb.WriteString("\n\n")
 	sb.WriteString("YOUR ROLE: Analyze code logic to determine if this is a valid bug.\n\n")
 	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n\n")
+	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
+	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim is real.\n")
+	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n")
+	sb.WriteString("- Do NOT claim you ran code/tests; rely on code reading and reasoning only.\n\n")
+	sb.WriteString("REQUIRED: After the verdict line, begin with a single-sentence restatement of the issueText claim you are judging.\n\n")
 	sb.WriteString("Their task:\n")
 	sb.WriteString("- Analyze the code logic for correctness\n")
 	sb.WriteString("- Check for edge cases and error handling\n")
@@ -51,6 +55,8 @@ func buildLogicAnalystPrompt(task string, issueText string) string {
 	sb.WriteString("<Your analysis of the code logic>\n\n")
 	sb.WriteString("## Evidence\n")
 	sb.WriteString("<Code traces or architectural analysis supporting your verdict>\n")
+	sb.WriteString("\n## Additions (out of scope)\n")
+	sb.WriteString("<Optional: other issues you noticed, explicitly out of scope for this verdict>\n")
 	return sb.String()
 }
 
@@ -65,6 +71,11 @@ func buildTesterPrompt(task string, issueText string) string {
 	sb.WriteString("\n\n")
 	sb.WriteString("YOUR ROLE: Reproduce the issue by actually running code.\n\n")
 	sb.WriteString("Simulate a QA engineer who verifies bugs by running real tests.\n\n")
+	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
+	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim exists in reality.\n")
+	sb.WriteString("- Your reproduction MUST target that claim directly.\n")
+	sb.WriteString("- If you find other failures/issues that are not the issueText claim, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n\n")
+	sb.WriteString("REQUIRED: After the verdict line, begin with a single-sentence restatement of the issueText claim you are testing.\n\n")
 	sb.WriteString("Their task:\n")
 	sb.WriteString("- Attempt to reproduce the reported issue\n")
 	sb.WriteString("- Write and run a minimal failing test\n")
@@ -83,6 +94,8 @@ func buildTesterPrompt(task string, issueText string) string {
 	sb.WriteString("## Test Evidence\n")
 	sb.WriteString("<Actual test output or error messages>\n")
 	sb.WriteString("If you reference a custom script or test, include the key command or code snippet so others can rerun it; evidence without reproduction detail is not credible.\n")
+	sb.WriteString("\n## Additions (out of scope)\n")
+	sb.WriteString("<Optional: other issues you noticed, explicitly out of scope for this verdict>\n")
 	return sb.String()
 }
 
@@ -115,6 +128,14 @@ func buildExchangePrompt(role string, task string, issueText string, selfOpinion
 		sb.WriteString("- Stay consistent with your original role responsibilities.\n")
 	}
 	sb.WriteString("\n")
+	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
+	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim is real.\n")
+	sb.WriteString("- If either opinion mentions other issues, treat them as out of scope: include them under \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n")
+	sb.WriteString("- You may change your verdict ONLY based on evidence/reasoning about the issueText claim itself.\n\n")
+	sb.WriteString("ROUND 2 REQUIREMENT (KISS):\n")
+	sb.WriteString("Immediately after the verdict line, include these two lines:\n")
+	sb.WriteString("Claim: <1 sentence restatement of the issueText claim you are judging>\n")
+	sb.WriteString("Anchor: <file:line | failing test / repro command | symptom> (use \"unknown\" if not available)\n\n")
 	sb.WriteString("YOUR TASK:\n")
 	sb.WriteString("You previously reviewed this issue. Now you have seen your peer's analysis.\n")
 	sb.WriteString("- Consider their evidence and reasoning\n")
@@ -128,6 +149,8 @@ func buildExchangePrompt(role string, task string, issueText string, selfOpinion
 	sb.WriteString("<Address their key points>\n\n")
 	sb.WriteString("## Final Reasoning\n")
 	sb.WriteString("<Your updated analysis>\n")
+	sb.WriteString("\n## Additions (out of scope)\n")
+	sb.WriteString("<Optional: other issues you noticed, explicitly out of scope for this verdict>\n")
 	return sb.String()
 }
 
@@ -164,37 +187,55 @@ func extractTranscriptVerdict(transcript string) (verdictDecision, bool) {
 	return verdictDecision{}, false
 }
 
-func buildVerdictPrompt(transcript string) string {
+type alignmentVerdict struct {
+	Agree       bool   `json:"agree"`
+	Explanation string `json:"explanation"`
+}
+
+func buildAlignmentPrompt(issueText string, alpha Transcript, beta Transcript) string {
 	var sb strings.Builder
-	sb.WriteString("You are analyzing an agent transcript from a PR verification workflow.\n")
-	sb.WriteString("Determine whether the agent ultimately CONFIRMED the reported issue or REJECTED it.\n\n")
-	sb.WriteString("Transcript:\n<<<TRANSCRIPT>>>\n")
-	sb.WriteString(transcript)
-	sb.WriteString("\n<<<END TRANSCRIPT>>>\n\n")
-	sb.WriteString("Reply ONLY JSON: {\"verdict\":\"confirmed|rejected\",\"reason\":\"<original explanation>\"}.\n")
-	sb.WriteString("Use \"confirmed\" only if the agent clearly states the issue is real and provides evidence.\n")
-	sb.WriteString("Otherwise return \"rejected\".\n")
+	sb.WriteString("You are aligning two verification transcripts (Reviewer vs Tester) for the SAME issue.\n\n")
+	sb.WriteString("Issue under review (issueText):\n")
+	sb.WriteString(issueText)
+	sb.WriteString("\n\nTranscript A:\n<<<A>>>\n")
+	sb.WriteString(alpha.Text)
+	sb.WriteString("\n<<<END A>>>\n\nTranscript B:\n<<<B>>>\n")
+	sb.WriteString(beta.Text)
+	sb.WriteString("\n<<<END B>>>\n\n")
+	sb.WriteString("Task:\n")
+	sb.WriteString("- Decide whether A and B are confirming/rejecting the SAME issueText claim (same defect).\n")
+	sb.WriteString("- Ignore any \"Additions (out of scope)\" sections; they must not affect alignment.\n\n")
+	sb.WriteString("Reply ONLY JSON: {\"agree\":true/false,\"explanation\":\"...\"}.\n")
+	sb.WriteString("agree=true ONLY if both transcripts are clearly talking about the same underlying defect described by issueText.\n")
+	sb.WriteString("If uncertain, return agree=false.\n")
 	return sb.String()
 }
 
-func parseVerdictDecision(raw string) (verdictDecision, error) {
+func parseAlignment(raw string) (alignmentVerdict, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
-		return verdictDecision{}, errors.New("empty verdict response")
+		return alignmentVerdict{}, fmt.Errorf("empty alignment response (raw=%q)", truncateForError(raw))
 	}
 	jsonBlock := extractJSONBlock(trimmed)
-	var decision verdictDecision
-	if err := json.Unmarshal([]byte(jsonBlock), &decision); err != nil {
-		return verdictDecision{}, err
+	var verdict alignmentVerdict
+	if err := json.Unmarshal([]byte(jsonBlock), &verdict); err != nil {
+		return alignmentVerdict{}, fmt.Errorf("invalid alignment JSON: %v (json=%q raw=%q)", err, truncateForError(jsonBlock), truncateForError(trimmed))
 	}
-	verdict := strings.ToLower(strings.TrimSpace(decision.Verdict))
-	switch verdict {
-	case "confirmed", "rejected":
-		decision.Verdict = verdict
-		return decision, nil
-	default:
-		return verdictDecision{}, fmt.Errorf("invalid verdict %q", decision.Verdict)
+	return verdict, nil
+}
+
+func truncateForError(s string) string {
+	const limit = 600
+	out := strings.TrimSpace(s)
+	if out == "" {
+		return ""
 	}
+	out = strings.ReplaceAll(out, "\n", "\\n")
+	out = strings.ReplaceAll(out, "\t", "\\t")
+	if len(out) <= limit {
+		return out
+	}
+	return out[:limit] + "...(truncated)"
 }
 
 func extractJSONBlock(raw string) string {

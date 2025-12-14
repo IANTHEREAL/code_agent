@@ -90,33 +90,22 @@ func TestBuildExchangePromptProvidesTesterGuidance(t *testing.T) {
 	}
 }
 
-func TestBuildVerdictPromptContainsTranscript(t *testing.T) {
-	resp := "# VERDICT: CONFIRMED\nEvidence here"
-	prompt := buildVerdictPrompt(resp)
-	if !strings.Contains(prompt, resp) {
-		t.Fatalf("prompt missing transcript: %q", prompt)
+func TestBuildAlignmentPromptContainsInputs(t *testing.T) {
+	alpha := Transcript{Text: "A says # VERDICT: CONFIRMED"}
+	beta := Transcript{Text: "B says # VERDICT: CONFIRMED"}
+	issue := "ISSUE: sample"
+	prompt := buildAlignmentPrompt(issue, alpha, beta)
+	required := []string{
+		issue,
+		alpha.Text,
+		beta.Text,
+		"Reply ONLY JSON",
+		"agree=true",
 	}
-	if !strings.Contains(prompt, "Reply ONLY JSON") {
-		t.Fatalf("prompt missing JSON instruction: %q", prompt)
-	}
-}
-
-func TestParseVerdictDecision(t *testing.T) {
-	raw := "```json\n{\"verdict\": \"confirmed\", \"reason\": \"explicit marker\"}\n```"
-	decision, err := parseVerdictDecision(raw)
-	if err != nil {
-		t.Fatalf("parseVerdictDecision error: %v", err)
-	}
-	if decision.Verdict != "confirmed" {
-		t.Fatalf("unexpected verdict: %s", decision.Verdict)
-	}
-	if decision.Reason != "explicit marker" {
-		t.Fatalf("unexpected reason: %s", decision.Reason)
-	}
-
-	bad := "```json\n{\"verdict\": \"unknown\"}\n```"
-	if _, err := parseVerdictDecision(bad); err == nil {
-		t.Fatal("expected error for invalid verdict")
+	for _, needle := range required {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("alignment prompt missing %q: %q", needle, prompt)
+		}
 	}
 }
 

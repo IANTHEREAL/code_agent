@@ -72,6 +72,9 @@ type Runner struct {
 	opts     Options
 	streamer *streaming.JSONStreamer
 	events   *eventHelper
+
+	// alignmentOverride is a test hook to avoid network calls while exercising confirmIssue logic.
+	alignmentOverride func(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error)
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -216,16 +219,25 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 		ExchangeRounds: 0,
 	}
 
-	// If both agree in Round 1, we're done
-	if reviewerVerdict.Verdict == testerVerdict.Verdict {
-		if reviewerVerdict.Verdict == "confirmed" {
-			report.Status = commentConfirmed
-			report.VerdictExplanation = "Round 1: Both Reviewer and Tester confirmed the issue"
-		} else {
-			report.Status = commentUnresolved
-			report.VerdictExplanation = "Round 1: Both Reviewer and Tester rejected the issue"
-		}
+	// Round 1 short-circuit:
+	// - If both reject: unresolved
+	// - If both confirm: require cross-transcript alignment before confirming
+	if reviewerVerdict.Verdict == testerVerdict.Verdict && reviewerVerdict.Verdict == "rejected" {
+		report.Status = commentUnresolved
+		report.VerdictExplanation = "Round 1: Both Reviewer and Tester rejected the issue"
 		return report, nil
+	}
+	if reviewerVerdict.Verdict == testerVerdict.Verdict && reviewerVerdict.Verdict == "confirmed" {
+		aligned, err := r.checkAlignment(issueText, reviewer, tester)
+		if err != nil {
+			return IssueReport{}, err
+		}
+		if aligned.Agree {
+			report.Status = commentConfirmed
+			report.VerdictExplanation = fmt.Sprintf("Round 1: Both confirmed and aligned: %s", strings.TrimSpace(aligned.Explanation))
+			return report, nil
+		}
+		// If both confirmed but did not align on the same defect, do NOT confirm; proceed to exchange.
 	}
 
 	// Round 2: Exchange opinions
@@ -260,13 +272,24 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	report.Beta = testerR2
 
 	if reviewerR2Verdict.Verdict == testerR2Verdict.Verdict && reviewerR2Verdict.Verdict == "confirmed" {
-		report.Status = commentConfirmed
-		report.VerdictExplanation = "Round 2: Both agreed to confirm after exchange"
-	} else {
-		// 存疑不报: If still no unanimous confirmation, don't post
+		aligned, err := r.checkAlignment(issueText, reviewerR2, testerR2)
+		if err != nil {
+			return IssueReport{}, err
+		}
+		if aligned.Agree {
+			report.Status = commentConfirmed
+			report.VerdictExplanation = fmt.Sprintf("Round 2: Both confirmed and aligned: %s", strings.TrimSpace(aligned.Explanation))
+			return report, nil
+		}
+		// Both say confirmed, but not aligned => unresolved (存疑不报).
 		report.Status = commentUnresolved
-		report.VerdictExplanation = "Round 2: No unanimous confirmation (存疑不报)"
+		report.VerdictExplanation = fmt.Sprintf("Round 2: Confirmed but misaligned (存疑不报): %s", strings.TrimSpace(aligned.Explanation))
+		return report, nil
 	}
+
+	// 存疑不报: If still no unanimous confirmation, don't post
+	report.Status = commentUnresolved
+	report.VerdictExplanation = "Round 2: No unanimous confirmation (存疑不报)"
 
 	return report, nil
 }
@@ -384,20 +407,42 @@ func (r *Runner) determineVerdict(transcript Transcript) (verdictDecision, error
 		return decision, nil
 	}
 
-	// 2. Fallback to LLM judgment
-	prompt := buildVerdictPrompt(transcript.Text)
+	// No LLM fallback: missing explicit marker => reject (conservative).
+	return verdictDecision{
+		Verdict: "rejected",
+		Reason:  "missing explicit transcript verdict marker",
+	}, nil
+}
+
+func (r *Runner) checkAlignment(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error) {
+	if r.alignmentOverride != nil {
+		return r.alignmentOverride(issueText, alpha, beta)
+	}
+	if r.brain == nil {
+		return alignmentVerdict{}, errors.New("brain is required for alignment check")
+	}
+	prompt := buildAlignmentPrompt(issueText, alpha, beta)
 	resp, err := r.brain.Complete([]b.ChatMessage{
-		{Role: "system", Content: "Classify verification transcripts as confirmed or rejected. Reply only with JSON."},
+		{Role: "system", Content: "Return JSON alignment verdicts for two transcripts. Reply only with JSON."},
 		{Role: "user", Content: prompt},
 	}, nil)
 	if err != nil {
-		return verdictDecision{}, err
+		return alignmentVerdict{}, err
 	}
-	decision, err := parseVerdictDecision(resp.Choices[0].Message.Content)
+	content := ""
+	if resp != nil && len(resp.Choices) > 0 {
+		content = resp.Choices[0].Message.Content
+	}
+	if strings.TrimSpace(content) == "" {
+		logx.Errorf("Alignment LLM returned empty content (issue=%q)", streaming.PromptPreview(issueText))
+		return alignmentVerdict{}, errors.New("alignment returned empty content")
+	}
+	verdict, err := parseAlignment(content)
 	if err != nil {
-		return verdictDecision{}, err
+		logx.Errorf("Alignment parse failed: %v. Raw response=%q", err, content)
+		return alignmentVerdict{}, err
 	}
-	return decision, nil
+	return verdict, nil
 }
 
 type eventHelper struct {
