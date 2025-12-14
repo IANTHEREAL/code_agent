@@ -43,6 +43,7 @@ Never hard-code absolute filesystem paths; derive locations relative to the repo
 #### Implement (codex)
 
 You are an expert engineer. Your goal is to produce high-quality, verified code based on deep analysis.
+Before you start coding: Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.
 
 **User Task**: [The user's original task description - must be passed on exactly as is]
 
@@ -59,6 +60,7 @@ You are an expert engineer. Your goal is to produce high-quality, verified code 
 
 
 2.  **Phase 1: Analysis & Design** (Only if Phase 0 passes)
+	* Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.
     * **Analyze**:
         * **For Bugs**: Perform Root Cause Analysis (RCA). Locate the code causing the issue.
         * **For Features**: Identify all code paths and files that need modification.
@@ -640,16 +642,7 @@ func BuildInstructions(report map[string]any) string {
 			parts = append(parts, fmt.Sprintf("Next (if your are allowed or instructed), you can rerun dev-agent with --parent-branch-id %s to continue automated iterations;", target))
 		}
 	case statusFinishedWithError:
-		target := latest
-		if target == "" {
-			target = start
-		}
-		if target != "" {
-			parts = append(parts, fmt.Sprintf("Workflow stopped in FINISHED_WITH_ERROR; inspect manifest %s in Pantheon to diagnose why review_code could not produce its log.", target))
-		} else {
-			parts = append(parts, "Workflow stopped in FINISHED_WITH_ERROR; inspect the Pantheon branch lineage to diagnose why review_code could not produce its log.")
-		}
-		parts = append(parts, "After resolving the underlying issue, rerun dev-agent from the latest healthy branch to resume the workflow.")
+		parts = append(parts, "Workflow stopped in FINISHED_WITH_ERROR. See error.message for details.")
 	default:
 		if publishReport != "" {
 			parts = append(parts, "Next step: review the pushed GitHub branch and, based on your process, proceed with the normal PR/merge workflow.")
@@ -897,7 +890,7 @@ func buildErrorFinalReport(task, summary, instruction string, details map[string
 	}
 	summary = strings.TrimSpace(summary)
 	if summary == "" {
-		summary = "Workflow halted: review_code failed to produce the required review log."
+		summary = "Workflow halted due to a tool execution error."
 	}
 	out["summary"] = summary
 	if instruction != "" {

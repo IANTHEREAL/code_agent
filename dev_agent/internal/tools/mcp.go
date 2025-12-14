@@ -82,11 +82,18 @@ func (c *MCPClient) callWithRetries(method string, params map[string]any, timeou
 		maxRetries = 1
 	}
 	c.requestID++
+	copiedParams := make(map[string]any, len(params))
+	for k, v := range params {
+		copiedParams[k] = v
+	}
 	payload := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      c.requestID,
 		"method":  method,
-		"params":  params,
+		"params":  copiedParams,
+		"_meta": map[string]any{
+			"ai.tidb.pantheon-ai/agent": "dev_agent",
+		},
 	}
 	var lastErr error
 
