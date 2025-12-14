@@ -5,11 +5,22 @@ import (
 	"testing"
 )
 
-func TestBuildReviewPromptUsesCodexSentinel(t *testing.T) {
-	// NOTE: buildIssueFinderPrompt intentionally returns the literal sentinel
-	// expected by Codex review (see https://github.com/openai/codex/issues/6432).
-	if got := buildIssueFinderPrompt("https://github.com/org/repo/pull/42"); got != "base-branch main" {
-		t.Fatalf("expected codex sentinel, got %q", got)
+func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
+	task := "https://github.com/org/repo/pull/42"
+	got := buildIssueFinderPrompt(task)
+
+	required := []string{
+		"Task: " + task,
+		"Review the code changes against the base branch",
+		"git merge-base HEAD BASE_BRANCH",
+		"git diff MERGE_BASE_SHA",
+		"Provide prioritized, actionable findings",
+	}
+
+	for _, req := range required {
+		if !strings.Contains(got, req) {
+			t.Errorf("prompt missing required text: %q", req)
+		}
 	}
 }
 

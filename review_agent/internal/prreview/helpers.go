@@ -8,9 +8,20 @@ import (
 )
 
 func buildIssueFinderPrompt(task string) string {
-	// NOTE: The Codex review flow expects this sentinel string to trigger its built-in
-	// prompt template; see https://github.com/openai/codex/issues/6432 for context.
-	return "base-branch main"
+	var sb strings.Builder
+	sb.WriteString("Task: ")
+	sb.WriteString(task)
+	sb.WriteString("\n\n")
+	sb.WriteString("Review the code changes against the base branch 'BASE_BRANCH' = main or master (PR-style).\n\n")
+	sb.WriteString("  1) Find the merge-base SHA for this comparison:\n")
+	sb.WriteString("     - Try: git merge-base HEAD BASE_BRANCH\n")
+	sb.WriteString("     - If that fails, try: git merge-base HEAD \"BASE_BRANCH@{upstream}\"\n")
+	sb.WriteString("     - If still failing, inspect refs/remotes and pick the correct remote-tracking ref, then re-run merge-base.\n\n")
+	sb.WriteString("  2) Once you have MERGE_BASE_SHA, inspect the changes relative to the base branch:\n")
+	sb.WriteString("     - Run: git diff MERGE_BASE_SHA\n")
+	sb.WriteString("     - Also run: git diff --name-status MERGE_BASE_SHA\n\n")
+	sb.WriteString("  3) Provide prioritized, actionable findings based on that diff (correctness, bugs, security, edge cases, API/contracts, tests, UX where relevant). Include file/line references when possible.")
+	return sb.String()
 }
 
 // buildReviewerPrompt creates the prompt for the Reviewer role (logic analysis).
