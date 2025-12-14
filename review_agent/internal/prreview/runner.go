@@ -19,6 +19,11 @@ const (
 	commentConfirmed    = "confirmed"
 	commentUnresolved   = "unresolved"
 	defaultMaxExchanges = 1
+	verdictConfirmed    = "CONFIRMED"
+	verdictRejected     = "REJECTED"
+	roleReviewer        = "reviewer"
+	roleTester          = "tester"
+	noConsensusMessage  = "存疑不报: reviewer and tester could not reach unanimous confirmation."
 )
 
 // Options configures the PR review workflow.
@@ -52,6 +57,7 @@ type Transcript struct {
 	Agent    string `json:"agent"`
 	Round    int    `json:"round"`
 	BranchID string `json:"branch_id,omitempty"`
+	Verdict  string `json:"verdict"`
 	Text     string `json:"text"`
 }
 
@@ -59,19 +65,20 @@ type Transcript struct {
 type IssueReport struct {
 	IssueText          string     `json:"issue_text"`
 	Status             string     `json:"status"`
-	Alpha              Transcript `json:"alpha"`
-	Beta               Transcript `json:"beta"`
+	Reviewer           Transcript `json:"reviewer"`
+	Tester             Transcript `json:"tester"`
 	ExchangeRounds     int        `json:"exchange_rounds"`
 	VerdictExplanation string     `json:"verdict_explanation,omitempty"`
 }
 
 // Runner executes the two-phase PR review workflow.
 type Runner struct {
-	brain    *b.LLMBrain
-	handler  *t.ToolHandler
-	opts     Options
-	streamer *streaming.JSONStreamer
-	events   *eventHelper
+	brain     *b.LLMBrain
+	handler   *t.ToolHandler
+	opts      Options
+	streamer  *streaming.JSONStreamer
+	events    *eventHelper
+	runRoleFn func(role, prompt string, round int, parentBranchID string) (Transcript, error)
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -188,73 +195,136 @@ func (r *Runner) runSingleReview() (ReviewerLog, error) {
 }
 
 func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueReport, error) {
-	// Linear chaining:
-	// Verifier Alpha starts from startBranchID (Reviewer's branch).
-	alpha, err := r.runVerifier("verifier-alpha", issueText, "", 1, startBranchID)
+	reviewer, err := r.runReviewer(issueText, startBranchID, 1)
 	if err != nil {
 		return IssueReport{}, err
 	}
 
-	// Verifier Beta starts from Alpha's branch.
-	beta, err := r.runVerifier("verifier-beta", issueText, "", 1, alpha.BranchID)
-	if err != nil {
-		return IssueReport{}, err
-	}
-
-	verdict, err := r.checkConsensus(issueText, alpha, beta)
+	tester, err := r.runTester(issueText, startBranchID, 1)
 	if err != nil {
 		return IssueReport{}, err
 	}
 
 	exchanges := 0
-	for !verdict.Agree && exchanges < r.opts.MaxExchangeRuns {
+	outcome := evaluatePanelConsensus(reviewer, tester)
+	for !outcome.Agree && exchanges < r.opts.MaxExchangeRuns {
 		exchanges++
-		// Continue the chain
-		// Alpha starts from Beta's branch
-		alpha, err = r.runVerifier("verifier-alpha", issueText, beta.Text, alpha.Round+1, beta.BranchID)
+		reviewer, err = r.runExchange(roleReviewer, issueText, tester, reviewer)
 		if err != nil {
 			return IssueReport{}, err
 		}
-		// Beta starts from Alpha's (new) branch
-		beta, err = r.runVerifier("verifier-beta", issueText, alpha.Text, beta.Round+1, alpha.BranchID)
+		tester, err = r.runExchange(roleTester, issueText, reviewer, tester)
 		if err != nil {
 			return IssueReport{}, err
 		}
-		verdict, err = r.checkConsensus(issueText, alpha, beta)
-		if err != nil {
-			return IssueReport{}, err
+		outcome = evaluatePanelConsensus(reviewer, tester)
+	}
+
+	if !outcome.Agree {
+		outcome.Status = commentUnresolved
+		if outcome.Explanation == "" {
+			outcome.Explanation = noConsensusMessage
 		}
 	}
 
-	report := IssueReport{
+	return IssueReport{
 		IssueText:          issueText,
-		Alpha:              alpha,
-		Beta:               beta,
+		Status:             outcome.Status,
+		Reviewer:           reviewer,
+		Tester:             tester,
 		ExchangeRounds:     exchanges,
-		VerdictExplanation: verdict.Explanation,
-	}
-	if verdict.Agree {
-		report.Status = commentConfirmed
-	} else {
-		report.Status = commentUnresolved
-	}
-	return report, nil
+		VerdictExplanation: outcome.Explanation,
+	}, nil
 }
 
-func (r *Runner) runVerifier(label string, issueText string, peerTranscript string, round int, parentBranchID string) (Transcript, error) {
-	prompt := buildVerifierPrompt(label, r.opts.Task, issueText, peerTranscript, round)
-	// Select agent: use codex-claude for verifier-beta, codex for others
+func (r *Runner) runReviewer(issueText string, parentBranchID string, round int) (Transcript, error) {
+	prompt := buildReviewerPrompt(r.opts.Task, issueText)
+	return r.runRole(roleReviewer, prompt, round, parentBranchID)
+}
+
+func (r *Runner) runTester(issueText string, parentBranchID string, round int) (Transcript, error) {
+	prompt := buildTesterPrompt(r.opts.Task, issueText)
+	return r.runRole(roleTester, prompt, round, parentBranchID)
+}
+
+func (r *Runner) runExchange(role string, issueText string, peer Transcript, current Transcript) (Transcript, error) {
+	prompt := buildExchangePrompt(role, issueText, peer.Text)
+	parent := peer.BranchID
+	if parent == "" {
+		parent = current.BranchID
+	}
+	if parent == "" {
+		parent = r.opts.ParentBranchID
+	}
+	nextRound := current.Round + 1
+	return r.runRole(role, prompt, nextRound, parent)
+}
+
+func (r *Runner) runRole(role, prompt string, round int, parentBranchID string) (Transcript, error) {
+	if parentBranchID == "" {
+		parentBranchID = r.opts.ParentBranchID
+	}
+	if parentBranchID == "" {
+		return Transcript{}, errors.New("missing parent branch id for role execution")
+	}
+	if r.runRoleFn != nil {
+		return r.runRoleFn(role, prompt, round, parentBranchID)
+	}
 	agent := "codex"
 	data, err := r.executeAgent(agent, prompt, parentBranchID)
 	if err != nil {
 		return Transcript{}, err
 	}
+	response := strings.TrimSpace(stringField(data, "response"))
+	verdict, err := extractVerdict(response)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("%s transcript missing verdict: %w", role, err)
+	}
 	return Transcript{
-		Agent:    label,
+		Agent:    role,
 		Round:    round,
 		BranchID: stringField(data, "branch_id"),
-		Text:     strings.TrimSpace(stringField(data, "response")),
+		Verdict:  verdict,
+		Text:     response,
 	}, nil
+}
+
+type panelConsensusResult struct {
+	Agree       bool
+	Verdict     string
+	Status      string
+	Explanation string
+}
+
+func evaluatePanelConsensus(reviewer Transcript, tester Transcript) panelConsensusResult {
+	verdictA := strings.ToUpper(strings.TrimSpace(reviewer.Verdict))
+	verdictB := strings.ToUpper(strings.TrimSpace(tester.Verdict))
+	if verdictA == "" || verdictB == "" {
+		return panelConsensusResult{
+			Status:      commentUnresolved,
+			Explanation: "Reviewer or Tester did not provide a verdict.",
+		}
+	}
+	if verdictA != verdictB {
+		return panelConsensusResult{
+			Status:      commentUnresolved,
+			Explanation: "Reviewer and Tester disagree on the issue; run the exchange round.",
+		}
+	}
+
+	status := commentUnresolved
+	explanation := fmt.Sprintf("Received unanimous %s verdict from Reviewer and Tester.", verdictA)
+	if verdictA == verdictConfirmed {
+		status = commentConfirmed
+	} else if verdictA == verdictRejected {
+		explanation = "Both Reviewer and Tester unanimously REJECTED the report; no comment posted."
+	}
+	return panelConsensusResult{
+		Agree:       true,
+		Verdict:     verdictA,
+		Status:      status,
+		Explanation: explanation,
+	}
 }
 
 func (r *Runner) executeAgent(agent, prompt, parentBranchID string) (map[string]any, error) {
@@ -322,18 +392,6 @@ func (r *Runner) hasRealIssue(reportText string) (bool, error) {
 		return false, err
 	}
 	return check.HasIssue, nil
-}
-
-func (r *Runner) checkConsensus(issueText string, alpha Transcript, beta Transcript) (consensusVerdict, error) {
-	prompt := buildConsensusPrompt(issueText, alpha, beta)
-	resp, err := r.brain.Complete([]b.ChatMessage{
-		{Role: "system", Content: "Return JSON verdicts comparing codex transcripts. Always reply as JSON."},
-		{Role: "user", Content: prompt},
-	}, nil)
-	if err != nil {
-		return consensusVerdict{}, err
-	}
-	return parseConsensus(resp.Choices[0].Message.Content)
 }
 
 type eventHelper struct {

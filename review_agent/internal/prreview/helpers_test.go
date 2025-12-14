@@ -18,31 +18,66 @@ func TestBuildReviewPromptFocusesSingleCriticalIssue(t *testing.T) {
 	}
 }
 
-func TestBuildVerifierPromptContainsLinusDirectives(t *testing.T) {
-	prompt := buildVerifierPrompt("verifier-alpha", "some task", "some issue", "", 1)
-	requiredPhrases := []string{
-		"Linus Torvalds persona",
-		"Chesterton's Fence",
-		"Safety First",
-		"Architectural Intent",
-		"Root Cause Analysis",
-		"CRITICAL MINDSET",
-		"EVIDENCE FABRICATION WARNING",
+func TestBuildReviewerPromptMentionsLogicPanel(t *testing.T) {
+	prompt := buildReviewerPrompt("task context", "issue text")
+	expect := []string{
+		"Simulate a group of senior programmers",
+		"logic analysis",
+		"edge cases",
+		"issue text",
+		"# VERDICT",
 	}
-	for _, phrase := range requiredPhrases {
-		if !strings.Contains(prompt, phrase) {
-			t.Errorf("verifier prompt missing core directive: %q", phrase)
+	for _, needle := range expect {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("reviewer prompt missing %q: %s", needle, prompt)
 		}
 	}
 }
 
-func TestParseConsensus(t *testing.T) {
-	raw := "```json\n{\"agree\": true, \"explanation\": \"same failure\"}\n```"
-	verdict, err := parseConsensus(raw)
-	if err != nil {
-		t.Fatalf("parseConsensus error: %v", err)
+func TestBuildTesterPromptFocusesOnReproduction(t *testing.T) {
+	prompt := buildTesterPrompt("task context", "issue text")
+	expect := []string{
+		"Simulate a QA engineer",
+		"run code in Pantheon",
+		"real test failure",
+		"issue text",
+		"# VERDICT",
 	}
-	if !verdict.Agree || verdict.Explanation != "same failure" {
-		t.Fatalf("unexpected verdict: %+v", verdict)
+	for _, needle := range expect {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("tester prompt missing %q: %s", needle, prompt)
+		}
+	}
+}
+
+func TestBuildExchangePromptIncludesPeerOpinion(t *testing.T) {
+	peer := "Peer says CONFIRMED"
+	prompt := buildExchangePrompt("reviewer", "issue text", peer)
+	if !strings.Contains(prompt, "Round 2") {
+		t.Fatalf("exchange prompt missing round 2 context: %s", prompt)
+	}
+	if !strings.Contains(prompt, "<<<PEER>>>") || !strings.Contains(prompt, peer) {
+		t.Fatalf("exchange prompt missing peer transcript: %s", prompt)
+	}
+}
+
+func TestExtractVerdictParsesDirective(t *testing.T) {
+	text := `
+Random context
+# VERDICT: confirmed
+Details afterwards`
+	verdict, err := extractVerdict(text)
+	if err != nil {
+		t.Fatalf("extractVerdict returned error: %v", err)
+	}
+	if verdict != "CONFIRMED" {
+		t.Fatalf("expected CONFIRMED verdict, got %s", verdict)
+	}
+}
+
+func TestExtractVerdictFailsWithoutDirective(t *testing.T) {
+	_, err := extractVerdict("no verdict here")
+	if err == nil {
+		t.Fatal("expected error when verdict directive absent")
 	}
 }
