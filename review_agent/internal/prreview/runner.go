@@ -123,7 +123,7 @@ func (r *Runner) Run() (*Result, error) {
 
 	if strings.TrimSpace(reviewLog.Report) == "" {
 		result.Status = statusClean
-		result.Summary = "Clean PR: review_code reported no blocking P0/P1 issue."
+		result.Summary = "Clean PR: Not found any blocking P0/P1 issues."
 		r.attachBranchRange(result)
 		return result, nil
 	}
@@ -135,7 +135,7 @@ func (r *Runner) Run() (*Result, error) {
 	}
 	if !hasIssue {
 		result.Status = statusClean
-		result.Summary = "Clean PR: review_code found no blocking issues."
+		result.Summary = "Clean PR: Not found any blocking P0/P1 issues."
 		r.attachBranchRange(result)
 		return result, nil
 	}
@@ -381,7 +381,7 @@ func (r *Runner) callTool(name string, args map[string]any) (map[string]any, err
 }
 
 func (r *Runner) hasRealIssue(reportText string) (bool, error) {
-	prompt := fmt.Sprintf("Review report:\n%s\n\nDoes this report describe a real P0/P1 bug/issue that needs fixing? Reply ONLY with JSON: {\"has_issue\": true} or {\"has_issue\": false}", reportText)
+	prompt := buildHasRealIssuePrompt(reportText)
 	resp, err := r.brain.Complete([]b.ChatMessage{
 		{Role: "system", Content: "Analyze code review reports. Reply only with JSON."},
 		{Role: "user", Content: prompt},

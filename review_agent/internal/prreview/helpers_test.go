@@ -24,6 +24,23 @@ func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
 	}
 }
 
+func TestBuildHasRealIssuePromptContainsContractAndSentinel(t *testing.T) {
+	prompt := buildHasRealIssuePrompt("No P0/P1 issues found")
+	required := []string{
+		"strict triage",
+		"Contract:",
+		"No P0/P1 issues found",
+		"Reply ONLY with JSON",
+		"has_issue",
+		"Review report:",
+	}
+	for _, needle := range required {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("hasRealIssue prompt missing %q: %q", needle, prompt)
+		}
+	}
+}
+
 func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
 	prompt := buildLogicAnalystPrompt("some task", "some issue")
 	requiredPhrases := []string{
