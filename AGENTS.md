@@ -1,4 +1,12 @@
-# Agent Codex: The Builder & The Critic
+# Code Agent Workflows
+
+This repository contains two MCP-powered Go CLIs:
+- `dev_agent` (`dev_agent/cmd/dev-agent`): orchestrates a TDD Implement → Review → Fix loop and (optionally) a final publish.
+- `review_agent` (`review_agent/cmd/review-agent`): runs a PR-style review and then verifies whether any reported P0/P1 issue is real (no publish).
+
+Both CLIs rely on Pantheon branch lineage: every `execute_agent` call creates a new branch and must chain via `parent_branch_id`.
+
+## dev_agent: The Builder & The Critic
 
 `dev_agent` orchestrates work through two single-turn specialists— **Codex** or **Claude Code** (builder) and **review_code** (critic)—to enforce an auditable TDD loop. Every turn produces a new Pantheon branch, so branch lineage is strictly linear and each agent receives a complete prompt (task, phase goals, context).
 
@@ -46,3 +54,12 @@
 - **Ultrathink**: pause to reason before editing; every step should be intentional.
 - **Tracing**: `worklog.md` plus `code_review.log` form the audit trail referenced in the final JSON report and publish summary.
 - **Iteration safety**: If a tool call returns `FINISHED_WITH_ERROR`, the orchestrator surfaces that instruction and stops—ensure the artifacts accurately describe what went wrong.
+
+## review_agent: PR Review Verifier
+
+`review_agent` runs a single PR-style review and then tries to confirm whether the reported P0/P1 issue is real before surfacing it:
+- **Step 1 (review_code)**: run `review_code`, then read `WORKSPACE_DIR/code_review.log` (up to 3 attempts; missing log halts with `FINISHED_WITH_ERROR`).
+- **Step 2 (triage)**: if the report is empty or deemed not a real P0/P1 issue, the run is treated as clean.
+- **Step 3 (confirm, codex)**: if the report looks real, run `codex` as two verification roles—`reviewer` (logic) and `tester` (reproduction)—followed by one “exchange” round.
+- **Stop condition**: only mark an issue *confirmed* when both roles converge on `CONFIRMED` and align on the same underlying defect; otherwise mark it *unresolved* (“存疑不报”).
+- **Output**: emits a structured JSON result (review logs, transcripts, verdicts) and does not commit/push branches.
