@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"review_agent/internal/logx"
+	"sync"
 	"strings"
 	"time"
 )
@@ -34,6 +35,7 @@ const (
 )
 
 type BranchTracker struct {
+	mu     sync.Mutex
 	start  string
 	latest string
 }
@@ -46,6 +48,8 @@ func (t *BranchTracker) Record(id string) {
 	if id == "" {
 		return
 	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	if t.start == "" {
 		t.start = id
 	}
@@ -53,6 +57,8 @@ func (t *BranchTracker) Record(id string) {
 }
 
 func (t *BranchTracker) Range() map[string]string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	return map[string]string{"start_branch_id": t.start, "latest_branch_id": t.latest}
 }
 

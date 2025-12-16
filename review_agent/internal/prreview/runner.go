@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"strings"
 	"time"
 
@@ -61,6 +63,10 @@ type IssueReport struct {
 	Status             string     `json:"status"`
 	Alpha              Transcript `json:"alpha"`
 	Beta               Transcript `json:"beta"`
+	ReviewerRound1BranchID string `json:"reviewer_round1_branch_id,omitempty"`
+	TesterRound1BranchID   string `json:"tester_round1_branch_id,omitempty"`
+	ReviewerRound2BranchID string `json:"reviewer_round2_branch_id,omitempty"`
+	TesterRound2BranchID   string `json:"tester_round2_branch_id,omitempty"`
 	ExchangeRounds     int        `json:"exchange_rounds"`
 	VerdictExplanation string     `json:"verdict_explanation,omitempty"`
 }
@@ -190,32 +196,76 @@ func (r *Runner) runSingleReview() (ReviewerLog, error) {
 func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueReport, error) {
 	// V2 Flow: Reviewer + Tester with two-round unanimous consensus
 
-	// Round 1: Independent review
-	reviewer, err := r.runRole("reviewer", issueText, startBranchID)
-	if err != nil {
-		return IssueReport{}, err
+	type roleRun struct {
+		transcript Transcript
+		verdict    verdictDecision
+		err        error
 	}
-	reviewerVerdict, err := r.determineVerdict(reviewer)
-	if err != nil {
-		return IssueReport{}, fmt.Errorf("reviewer verdict: %w", err)
+
+	runRoleWithVerdict := func(role string, parent string, out *roleRun) {
+		transcript, err := r.runRole(role, issueText, parent)
+		if err != nil {
+			out.err = err
+			return
+		}
+		decision, err := r.determineVerdict(transcript)
+		if err != nil {
+			out.err = fmt.Errorf("%s verdict: %w", role, err)
+			return
+		}
+		transcript.Verdict = decision.Verdict
+		transcript.VerdictReason = decision.Reason
+		out.transcript = transcript
+		out.verdict = decision
 	}
-	reviewer.Verdict = reviewerVerdict.Verdict
-	reviewer.VerdictReason = reviewerVerdict.Reason
-	tester, err := r.runRole("tester", issueText, reviewer.BranchID)
-	if err != nil {
-		return IssueReport{}, err
+
+	runExchangeWithVerdict := func(role string, selfOpinion string, peerOpinion string, parent string, out *roleRun) {
+		transcript, err := r.runExchange(role, issueText, selfOpinion, peerOpinion, parent)
+		if err != nil {
+			out.err = err
+			return
+		}
+		decision, err := r.determineVerdict(transcript)
+		if err != nil {
+			out.err = fmt.Errorf("%s round 2 verdict: %w", role, err)
+			return
+		}
+		transcript.Verdict = decision.Verdict
+		transcript.VerdictReason = decision.Reason
+		out.transcript = transcript
+		out.verdict = decision
 	}
-	testerVerdict, err := r.determineVerdict(tester)
-	if err != nil {
-		return IssueReport{}, fmt.Errorf("tester verdict: %w", err)
+
+	// Round 1: Independent review (parallel + double-blind fork)
+	var reviewerRun, testerRun roleRun
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		runRoleWithVerdict("reviewer", startBranchID, &reviewerRun)
+	}()
+	go func() {
+		defer wg.Done()
+		runRoleWithVerdict("tester", startBranchID, &testerRun)
+	}()
+	wg.Wait()
+	if reviewerRun.err != nil {
+		return IssueReport{}, reviewerRun.err
 	}
-	tester.Verdict = testerVerdict.Verdict
-	tester.VerdictReason = testerVerdict.Reason
+	if testerRun.err != nil {
+		return IssueReport{}, testerRun.err
+	}
+	reviewer := reviewerRun.transcript
+	tester := testerRun.transcript
+	reviewerVerdict := reviewerRun.verdict
+	testerVerdict := testerRun.verdict
 
 	report := IssueReport{
 		IssueText:      issueText,
 		Alpha:          reviewer,
 		Beta:           tester,
+		ReviewerRound1BranchID: reviewer.BranchID,
+		TesterRound1BranchID:   tester.BranchID,
 		ExchangeRounds: 0,
 	}
 
@@ -243,33 +293,35 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	// Round 2: Exchange opinions
 	report.ExchangeRounds = 1
 
-	// Reviewer sees Tester's opinion
-	reviewerR2, err := r.runExchange("reviewer", issueText, reviewer.Text, tester.Text, tester.BranchID)
-	if err != nil {
-		return IssueReport{}, err
+	// Round 2: each role forks from its own Round 1 branch (no cross-branch contamination).
+	var reviewerR2Run, testerR2Run roleRun
+	wg = sync.WaitGroup{}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		runExchangeWithVerdict("reviewer", reviewer.Text, tester.Text, reviewer.BranchID, &reviewerR2Run)
+	}()
+	go func() {
+		defer wg.Done()
+		runExchangeWithVerdict("tester", tester.Text, reviewer.Text, tester.BranchID, &testerR2Run)
+	}()
+	wg.Wait()
+	if reviewerR2Run.err != nil {
+		return IssueReport{}, reviewerR2Run.err
 	}
-	reviewerR2Verdict, err := r.determineVerdict(reviewerR2)
-	if err != nil {
-		return IssueReport{}, fmt.Errorf("reviewer round 2 verdict: %w", err)
+	if testerR2Run.err != nil {
+		return IssueReport{}, testerR2Run.err
 	}
-	reviewerR2.Verdict = reviewerR2Verdict.Verdict
-	reviewerR2.VerdictReason = reviewerR2Verdict.Reason
-
-	// Tester sees Reviewer's updated opinion
-	testerR2, err := r.runExchange("tester", issueText, tester.Text, reviewerR2.Text, reviewerR2.BranchID)
-	if err != nil {
-		return IssueReport{}, err
-	}
-	testerR2Verdict, err := r.determineVerdict(testerR2)
-	if err != nil {
-		return IssueReport{}, fmt.Errorf("tester round 2 verdict: %w", err)
-	}
-	testerR2.Verdict = testerR2Verdict.Verdict
-	testerR2.VerdictReason = testerR2Verdict.Reason
+	reviewerR2 := reviewerR2Run.transcript
+	testerR2 := testerR2Run.transcript
+	reviewerR2Verdict := reviewerR2Run.verdict
+	testerR2Verdict := testerR2Run.verdict
 
 	// Update report with Round 2 results
 	report.Alpha = reviewerR2
 	report.Beta = testerR2
+	report.ReviewerRound2BranchID = reviewerR2.BranchID
+	report.TesterRound2BranchID = testerR2.BranchID
 
 	if reviewerR2Verdict.Verdict == testerR2Verdict.Verdict && reviewerR2Verdict.Verdict == "confirmed" {
 		aligned, err := r.checkAlignment(issueText, reviewerR2, testerR2)
@@ -447,7 +499,7 @@ func (r *Runner) checkAlignment(issueText string, alpha Transcript, beta Transcr
 
 type eventHelper struct {
 	streamer *streaming.JSONStreamer
-	nextID   int
+	nextID   int64
 }
 
 func newEventHelper(streamer *streaming.JSONStreamer) *eventHelper {
@@ -461,8 +513,8 @@ func (e *eventHelper) ToolStarted(kind, name string, args map[string]any) string
 	if e == nil {
 		return ""
 	}
-	e.nextID++
-	itemID := fmt.Sprintf("item_%d", e.nextID)
+	id := atomic.AddInt64(&e.nextID, 1)
+	itemID := fmt.Sprintf("item_%d", id)
 	e.streamer.EmitItemStarted(itemID, kind, name, args)
 	return itemID
 }
