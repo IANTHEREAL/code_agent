@@ -7,11 +7,20 @@ import (
 	"strings"
 )
 
-func buildIssueFinderPrompt(task string) string {
+const universalStudyLine = "Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out."
+
+func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	var sb strings.Builder
 	sb.WriteString("Task: ")
 	sb.WriteString(task)
 	sb.WriteString("\n\n")
+	sb.WriteString(universalStudyLine)
+	sb.WriteString("\n\n")
+	if strings.TrimSpace(changeAnalysisPath) != "" {
+		sb.WriteString("Reference (read-only): Change Analysis at: ")
+		sb.WriteString(changeAnalysisPath)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString("Review the code changes against the base branch 'BASE_BRANCH' = main or master (PR-style).\n\n")
 	sb.WriteString("  1) Find the merge-base SHA for this comparison:\n")
 	sb.WriteString("     - Try: git merge-base HEAD BASE_BRANCH\n")
@@ -21,6 +30,28 @@ func buildIssueFinderPrompt(task string) string {
 	sb.WriteString("     - Run: git diff MERGE_BASE_SHA\n")
 	sb.WriteString("     - Also run: git diff --name-status MERGE_BASE_SHA\n\n")
 	sb.WriteString("  3) Provide prioritized, actionable findings based on that diff (correctness, bugs, security, edge cases, API/contracts, tests, UX where relevant). Include file/line references when possible.")
+	return sb.String()
+}
+
+func buildScoutPrompt(task string, outputPath string) string {
+	var sb strings.Builder
+	sb.WriteString("Role: SCOUT\n\n")
+	sb.WriteString(universalStudyLine)
+	sb.WriteString("\n\n")
+	sb.WriteString("Task / PR context:\n")
+	sb.WriteString(task)
+	sb.WriteString("\n\n")
+	sb.WriteString("Requirement: Write a concise Change Analysis about what changed and what is impacted.\n")
+	sb.WriteString("Write the analysis to: ")
+	sb.WriteString(outputPath)
+	sb.WriteString("\n\n")
+	sb.WriteString("Output format (keep it short):\n")
+	sb.WriteString("# CHANGE ANALYSIS\n")
+	sb.WriteString("## Change Surface\n")
+	sb.WriteString("## Defaults / Contracts (if any)\n")
+	sb.WriteString("## Most Likely Risks\n")
+	sb.WriteString("## Likely Impacted Code\n")
+	sb.WriteString("## Suggested Minimal Tests\n")
 	return sb.String()
 }
 
@@ -39,14 +70,21 @@ func buildHasRealIssuePrompt(reportText string) string {
 }
 
 // buildReviewerPrompt creates the prompt for the Reviewer role (logic analysis).
-func buildLogicAnalystPrompt(task string, issueText string) string {
+func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath string) string {
 	var sb strings.Builder
 	sb.WriteString("Verification Role: REVIEWER\n\n")
+	sb.WriteString(universalStudyLine)
+	sb.WriteString("\n\n")
 	sb.WriteString("Task / PR context:\n")
 	sb.WriteString(task)
 	sb.WriteString("\n\nIssue under review:\n")
 	sb.WriteString(issueText)
 	sb.WriteString("\n\n")
+	if strings.TrimSpace(changeAnalysisPath) != "" {
+		sb.WriteString("Reference (read-only): Change Analysis at: ")
+		sb.WriteString(changeAnalysisPath)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString("YOUR ROLE: Analyze code logic to determine if this is a valid bug.\n\n")
 	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n\n")
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
@@ -75,14 +113,21 @@ func buildLogicAnalystPrompt(task string, issueText string) string {
 }
 
 // buildTesterPrompt creates the prompt for the Tester role (reproduction).
-func buildTesterPrompt(task string, issueText string) string {
+func buildTesterPrompt(task string, issueText string, changeAnalysisPath string) string {
 	var sb strings.Builder
 	sb.WriteString("Verification Role: TESTER\n\n")
+	sb.WriteString(universalStudyLine)
+	sb.WriteString("\n\n")
 	sb.WriteString("Task / PR context:\n")
 	sb.WriteString(task)
 	sb.WriteString("\n\nIssue under review:\n")
 	sb.WriteString(issueText)
 	sb.WriteString("\n\n")
+	if strings.TrimSpace(changeAnalysisPath) != "" {
+		sb.WriteString("Reference (read-only): Change Analysis at: ")
+		sb.WriteString(changeAnalysisPath)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString("YOUR ROLE: Reproduce the issue by actually running code.\n\n")
 	sb.WriteString("Simulate a QA engineer who verifies bugs by running real tests.\n\n")
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
@@ -114,16 +159,23 @@ func buildTesterPrompt(task string, issueText string) string {
 }
 
 // buildExchangePrompt creates the prompt for Round 2 (exchange opinions).
-func buildExchangePrompt(role string, task string, issueText string, selfOpinion string, peerOpinion string) string {
+func buildExchangePrompt(role string, task string, issueText string, changeAnalysisPath string, selfOpinion string, peerOpinion string) string {
 	normalizedRole := strings.ToLower(strings.TrimSpace(role))
 	displayRole := strings.ToUpper(role)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Verification Role: %s (Round 2 - Exchange)\n\n", displayRole))
+	sb.WriteString(universalStudyLine)
+	sb.WriteString("\n\n")
 	sb.WriteString("Task / PR context:\n")
 	sb.WriteString(task)
 	sb.WriteString("\n\nIssue under review:\n")
 	sb.WriteString(issueText)
 	sb.WriteString("\n\n")
+	if strings.TrimSpace(changeAnalysisPath) != "" {
+		sb.WriteString("Reference (read-only): Change Analysis at: ")
+		sb.WriteString(changeAnalysisPath)
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString("YOUR PREVIOUS OPINION:\n<<<SELF>>>\n")
 	sb.WriteString(selfOpinion)
 	sb.WriteString("\n<<<END SELF>>>\n\n")
