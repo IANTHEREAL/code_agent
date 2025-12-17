@@ -28,8 +28,8 @@ func buildHasRealIssuePrompt(reportText string) string {
 	var sb strings.Builder
 	sb.WriteString("You are a strict triage parser for code review reports.\n\n")
 	sb.WriteString("Contract:\n")
-	sb.WriteString("- If the PR is clean (no blocking issues), the report MUST contain the exact phrase: \"No P0/P1 issues found\" (allowing only trivial punctuation/whitespace/case differences).\n")
-	sb.WriteString("- Otherwise, treat the report as describing a blocking P0/P1 issue.\n\n")
+	sb.WriteString("- If the report explicitly states no P0/P1 issues (or no blockers), treat the PR as clean.\n")
+	sb.WriteString("- Otherwise, treat the report as indicating at least one blocking P0/P1 issue.\n\n")
 	sb.WriteString("Given the following review report, decide whether it contains a blocking issue.\n")
 	sb.WriteString("Reply ONLY with JSON: {\"has_issue\": true} or {\"has_issue\": false}.\n\n")
 	sb.WriteString("Review report:\n")

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"review_agent/internal/logx"
@@ -24,7 +25,7 @@ type MCPClient struct {
 	maxRetries int
 	sessionID  string
 	client     *http.Client
-	requestID  int
+	requestID  int64
 }
 
 func NewMCPClient(baseURL string) *MCPClient {
@@ -81,10 +82,10 @@ func (c *MCPClient) callWithRetries(method string, params map[string]any, timeou
 	if maxRetries < 1 {
 		maxRetries = 1
 	}
-	c.requestID++
+	requestID := atomic.AddInt64(&c.requestID, 1)
 	payload := map[string]any{
 		"jsonrpc": "2.0",
-		"id":      c.requestID,
+		"id":      requestID,
 		"method":  method,
 		"params":  params,
 	}
