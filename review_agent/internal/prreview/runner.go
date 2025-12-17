@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -116,16 +117,28 @@ func NewRunner(brain *b.LLMBrain, handler *t.ToolHandler, streamer *streaming.JS
 // Run executes the workflow and returns the structured result.
 func (r *Runner) Run() (*Result, error) {
 	logx.Infof("Starting PR review workflow for parent %s", r.opts.ParentBranchID)
-	reviewLog, err := r.runSingleReview()
-	if err != nil {
-		return nil, err
-	}
+	parent := r.opts.ParentBranchID
 
 	result := &Result{
 		Task:         r.opts.Task,
-		ReviewerLogs: []ReviewerLog{reviewLog},
+		ReviewerLogs: []ReviewerLog{},
 		Issues:       []IssueReport{},
 	}
+
+	scoutBranchID := parent
+	analysisPath := ""
+	if branchID, path, err := r.runScout(parent); err != nil {
+		logx.Warningf("SCOUT soft-failed; continuing without change analysis. err=%v", err)
+	} else {
+		scoutBranchID = branchID
+		analysisPath = path
+	}
+
+	reviewLog, err := r.runSingleReview(scoutBranchID, analysisPath)
+	if err != nil {
+		return nil, err
+	}
+	result.ReviewerLogs = append(result.ReviewerLogs, reviewLog)
 
 	if strings.TrimSpace(reviewLog.Report) == "" {
 		result.Status = statusClean
@@ -147,8 +160,9 @@ func (r *Runner) Run() (*Result, error) {
 	}
 
 	issueText := reviewLog.Report
+
 	// Pass the reviewer's branch ID to start the verification chain
-	report, err := r.confirmIssue(issueText, reviewLog.BranchID)
+	report, err := r.confirmIssue(issueText, reviewLog.BranchID, analysisPath)
 	if err != nil {
 		return nil, err
 	}
@@ -176,9 +190,9 @@ func (r *Runner) attachBranchRange(res *Result) {
 	}
 }
 
-func (r *Runner) runSingleReview() (ReviewerLog, error) {
-	prompt := buildIssueFinderPrompt(r.opts.Task)
-	data, err := r.executeAgent("review_code", prompt, r.opts.ParentBranchID)
+func (r *Runner) runSingleReview(parentBranchID string, changeAnalysisPath string) (ReviewerLog, error) {
+	prompt := buildIssueFinderPrompt(r.opts.Task, changeAnalysisPath)
+	data, err := r.executeAgent("review_code", prompt, parentBranchID)
 	if err != nil {
 		return ReviewerLog{}, err
 	}
@@ -193,7 +207,7 @@ func (r *Runner) runSingleReview() (ReviewerLog, error) {
 	}, nil
 }
 
-func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueReport, error) {
+func (r *Runner) confirmIssue(issueText string, startBranchID string, changeAnalysisPath string) (IssueReport, error) {
 	// V2 Flow: Reviewer + Tester with two-round unanimous consensus
 
 	type roleRun struct {
@@ -203,7 +217,7 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	}
 
 	runRoleWithVerdict := func(role string, parent string, out *roleRun) {
-		transcript, err := r.runRole(role, issueText, parent)
+		transcript, err := r.runRole(role, issueText, changeAnalysisPath, parent)
 		if err != nil {
 			out.err = err
 			return
@@ -220,7 +234,7 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	}
 
 	runExchangeWithVerdict := func(role string, selfOpinion string, peerOpinion string, parent string, out *roleRun) {
-		transcript, err := r.runExchange(role, issueText, selfOpinion, peerOpinion, parent)
+		transcript, err := r.runExchange(role, issueText, changeAnalysisPath, selfOpinion, peerOpinion, parent)
 		if err != nil {
 			out.err = err
 			return
@@ -341,12 +355,12 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 }
 
 // runRole executes a role-based verification (Reviewer or Tester).
-func (r *Runner) runRole(role string, issueText string, parentBranchID string) (Transcript, error) {
+func (r *Runner) runRole(role string, issueText string, changeAnalysisPath string, parentBranchID string) (Transcript, error) {
 	var prompt string
 	if role == "reviewer" {
-		prompt = buildLogicAnalystPrompt(r.opts.Task, issueText)
+		prompt = buildLogicAnalystPrompt(r.opts.Task, issueText, changeAnalysisPath)
 	} else {
-		prompt = buildTesterPrompt(r.opts.Task, issueText)
+		prompt = buildTesterPrompt(r.opts.Task, issueText, changeAnalysisPath)
 	}
 
 	agent := "codex"
@@ -363,8 +377,8 @@ func (r *Runner) runRole(role string, issueText string, parentBranchID string) (
 }
 
 // runExchange executes Round 2 with both the agent's and peer's opinions.
-func (r *Runner) runExchange(role string, issueText string, selfOpinion string, peerOpinion string, parentBranchID string) (Transcript, error) {
-	prompt := buildExchangePrompt(role, r.opts.Task, issueText, selfOpinion, peerOpinion)
+func (r *Runner) runExchange(role string, issueText string, changeAnalysisPath string, selfOpinion string, peerOpinion string, parentBranchID string) (Transcript, error) {
+	prompt := buildExchangePrompt(role, r.opts.Task, issueText, changeAnalysisPath, selfOpinion, peerOpinion)
 
 	agent := "codex"
 	data, err := r.executeAgent(agent, prompt, parentBranchID)
@@ -424,6 +438,34 @@ func (r *Runner) callTool(name string, args map[string]any) (map[string]any, err
 		return nil, fmt.Errorf("%s returned no data", name)
 	}
 	return data, nil
+}
+
+const changeAnalysisFilename = "change_analysis.md"
+
+func (r *Runner) runScout(parentBranchID string) (string, string, error) {
+	if strings.TrimSpace(r.opts.WorkspaceDir) == "" {
+		return "", "", errors.New("workspace dir is required for scout output")
+	}
+	analysisPath := filepath.Join(r.opts.WorkspaceDir, changeAnalysisFilename)
+	prompt := buildScoutPrompt(r.opts.Task, analysisPath)
+
+	resp, err := r.executeAgent("codex", prompt, parentBranchID)
+	if err != nil {
+		return "", "", err
+	}
+	branchID := stringField(resp, "branch_id")
+	artifact, err := r.callTool("read_artifact", map[string]any{
+		"branch_id": branchID,
+		"path":      analysisPath,
+	})
+	if err != nil {
+		return "", "", err
+	}
+	content := stringField(artifact, "content")
+	if strings.TrimSpace(content) == "" {
+		return "", "", fmt.Errorf("scout wrote empty analysis file: %s", analysisPath)
+	}
+	return branchID, analysisPath, nil
 }
 
 func (r *Runner) hasRealIssue(reportText string) (bool, error) {

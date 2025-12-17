@@ -7,10 +7,12 @@ import (
 
 func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
 	task := "https://github.com/org/repo/pull/42"
-	got := buildIssueFinderPrompt(task)
+	got := buildIssueFinderPrompt(task, "/workspace/change_analysis.md")
 
 	required := []string{
 		"Task: " + task,
+		universalStudyLine,
+		"Change Analysis at:",
 		"Review the code changes against the base branch",
 		"git merge-base HEAD BASE_BRANCH",
 		"git diff MERGE_BASE_SHA",
@@ -42,12 +44,14 @@ func TestBuildHasRealIssuePromptContainsContractAndSentinel(t *testing.T) {
 }
 
 func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
-	prompt := buildLogicAnalystPrompt("some task", "some issue")
+	prompt := buildLogicAnalystPrompt("some task", "some issue", "/workspace/change_analysis.md")
 	requiredPhrases := []string{
 		"REVIEWER",
+		universalStudyLine,
 		"Simulate a group of senior programmers",
 		"Chesterton's Fence",
 		"VERDICT",
+		"Change Analysis at:",
 	}
 	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
@@ -57,14 +61,16 @@ func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
 }
 
 func TestBuildTesterPromptContainsRoleDirectives(t *testing.T) {
-	prompt := buildTesterPrompt("some task", "some issue")
+	prompt := buildTesterPrompt("some task", "some issue", "/workspace/change_analysis.md")
 	requiredPhrases := []string{
 		"TESTER",
+		universalStudyLine,
 		"Simulate a QA engineer",
 		"MUST actually run code",
 		"Do NOT fabricate",
 		"VERDICT",
 		"include the key command or code snippet",
+		"Change Analysis at:",
 	}
 	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
@@ -74,7 +80,7 @@ func TestBuildTesterPromptContainsRoleDirectives(t *testing.T) {
 }
 
 func TestBuildExchangePromptIncludesSelfPeerAndReviewerGuidance(t *testing.T) {
-	prompt := buildExchangePrompt("reviewer", "task", "issue", "my old verdict", "peer said hello")
+	prompt := buildExchangePrompt("reviewer", "task", "issue", "/workspace/change_analysis.md", "my old verdict", "peer said hello")
 	required := []string{
 		"my old verdict",
 		"peer said hello",
@@ -91,7 +97,7 @@ func TestBuildExchangePromptIncludesSelfPeerAndReviewerGuidance(t *testing.T) {
 }
 
 func TestBuildExchangePromptProvidesTesterGuidance(t *testing.T) {
-	prompt := buildExchangePrompt("tester", "task", "issue", "my reproduction log", "peer logic view")
+	prompt := buildExchangePrompt("tester", "task", "issue", "/workspace/change_analysis.md", "my reproduction log", "peer logic view")
 	required := []string{
 		"my reproduction log",
 		"peer logic view",
@@ -122,6 +128,26 @@ func TestBuildAlignmentPromptContainsInputs(t *testing.T) {
 	for _, needle := range required {
 		if !strings.Contains(prompt, needle) {
 			t.Fatalf("alignment prompt missing %q: %q", needle, prompt)
+		}
+	}
+}
+
+func TestBuildScoutPromptWritesToPath(t *testing.T) {
+	prompt := buildScoutPrompt("task", "/workspace/change_analysis.md")
+	required := []string{
+		"Role: SCOUT",
+		universalStudyLine,
+		"Write the analysis to:",
+		"/workspace/change_analysis.md",
+		"# CHANGE ANALYSIS",
+		"High-Risk Areas (ranked)",
+		"Before -> After",
+		"git merge-base HEAD BASE_BRANCH",
+		"git diff --name-status MERGE_BASE_SHA",
+	}
+	for _, needle := range required {
+		if !strings.Contains(prompt, needle) {
+			t.Fatalf("scout prompt missing %q: %q", needle, prompt)
 		}
 	}
 }

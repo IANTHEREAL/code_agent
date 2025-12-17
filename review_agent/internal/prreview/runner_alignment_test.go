@@ -35,11 +35,11 @@ type agentCall struct {
 func newFakeAgentClient(reviewerR1, testerR1, reviewerR2, testerR2 string) *fakeAgentClient {
 	return &fakeAgentClient{
 		byID:       map[string]string{},
-		reviewerR1:  reviewerR1,
-		testerR1:    testerR1,
-		reviewerR2:  reviewerR2,
-		testerR2:    testerR2,
-		calls:       []agentCall{},
+		reviewerR1: reviewerR1,
+		testerR1:   testerR1,
+		reviewerR2: reviewerR2,
+		testerR2:   testerR2,
+		calls:      []agentCall{},
 	}
 }
 
@@ -71,8 +71,8 @@ func (c *fakeAgentClient) ParallelExplore(projectName, parentBranchID string, pr
 
 func (c *fakeAgentClient) GetBranch(branchID string) (map[string]any, error) {
 	return map[string]any{
-		"id":            branchID,
-		"status":        "succeed",
+		"id":             branchID,
+		"status":         "succeed",
 		"latest_snap_id": fmt.Sprintf("%s_snap", branchID),
 	}, nil
 }
@@ -109,7 +109,7 @@ func TestConfirmIssueDoesNotConfirmWhenTranscriptsMisaligned(t *testing.T) {
 		return alignmentVerdict{Agree: false, Explanation: "test: misaligned"}, nil
 	}
 
-	report, err := runner.confirmIssue("ISSUE: example", "start")
+	report, err := runner.confirmIssue("ISSUE: example", "start", "")
 	if err != nil {
 		t.Fatalf("confirmIssue error: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestConfirmIssueUsesDoubleBlindBranchTopology(t *testing.T) {
 	}
 
 	startBranchID := "discovery_branch"
-	report, err := runner.confirmIssue("ISSUE: example", startBranchID)
+	report, err := runner.confirmIssue("ISSUE: example", startBranchID, "")
 	if err != nil {
 		t.Fatalf("confirmIssue error: %v", err)
 	}
