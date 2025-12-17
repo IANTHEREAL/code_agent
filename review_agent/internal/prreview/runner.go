@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
-	"strings"
 	"time"
 
 	b "review_agent/internal/brain"
@@ -59,16 +59,16 @@ type Transcript struct {
 
 // IssueReport stores the consensus outcome for a single ISSUE block.
 type IssueReport struct {
-	IssueText          string     `json:"issue_text"`
-	Status             string     `json:"status"`
-	Alpha              Transcript `json:"alpha"`
-	Beta               Transcript `json:"beta"`
-	ReviewerRound1BranchID string `json:"reviewer_round1_branch_id,omitempty"`
-	TesterRound1BranchID   string `json:"tester_round1_branch_id,omitempty"`
-	ReviewerRound2BranchID string `json:"reviewer_round2_branch_id,omitempty"`
-	TesterRound2BranchID   string `json:"tester_round2_branch_id,omitempty"`
-	ExchangeRounds     int        `json:"exchange_rounds"`
-	VerdictExplanation string     `json:"verdict_explanation,omitempty"`
+	IssueText              string     `json:"issue_text"`
+	Status                 string     `json:"status"`
+	Alpha                  Transcript `json:"alpha"`
+	Beta                   Transcript `json:"beta"`
+	ReviewerRound1BranchID string     `json:"reviewer_round1_branch_id,omitempty"`
+	TesterRound1BranchID   string     `json:"tester_round1_branch_id,omitempty"`
+	ReviewerRound2BranchID string     `json:"reviewer_round2_branch_id,omitempty"`
+	TesterRound2BranchID   string     `json:"tester_round2_branch_id,omitempty"`
+	ExchangeRounds         int        `json:"exchange_rounds"`
+	VerdictExplanation     string     `json:"verdict_explanation,omitempty"`
 }
 
 // Runner executes the two-phase PR review workflow.
@@ -261,12 +261,12 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	testerVerdict := testerRun.verdict
 
 	report := IssueReport{
-		IssueText:      issueText,
-		Alpha:          reviewer,
-		Beta:           tester,
+		IssueText:              issueText,
+		Alpha:                  reviewer,
+		Beta:                   tester,
 		ReviewerRound1BranchID: reviewer.BranchID,
 		TesterRound1BranchID:   tester.BranchID,
-		ExchangeRounds: 0,
+		ExchangeRounds:         0,
 	}
 
 	// Round 1 short-circuit:
@@ -293,22 +293,16 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string) (IssueRepo
 	// Round 2: Exchange opinions
 	report.ExchangeRounds = 1
 
-	// Round 2: each role forks from its own Round 1 branch (no cross-branch contamination).
+	// Round 2: Sequential exchange.
+	// 1. Reviewer sees Tester's R1 opinion and clarifies/rebuts (forking from Reviewer R1 branch).
 	var reviewerR2Run, testerR2Run roleRun
-	wg = sync.WaitGroup{}
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		runExchangeWithVerdict("reviewer", reviewer.Text, tester.Text, reviewer.BranchID, &reviewerR2Run)
-	}()
-	go func() {
-		defer wg.Done()
-		runExchangeWithVerdict("tester", tester.Text, reviewer.Text, tester.BranchID, &testerR2Run)
-	}()
-	wg.Wait()
+	runExchangeWithVerdict("reviewer", reviewer.Text, tester.Text, reviewer.BranchID, &reviewerR2Run)
 	if reviewerR2Run.err != nil {
 		return IssueReport{}, reviewerR2Run.err
 	}
+
+	// 2. Tester sees Reviewer's R2 "updated" opinion (forking from Tester R1 branch).
+	runExchangeWithVerdict("tester", tester.Text, reviewerR2Run.transcript.Text, tester.BranchID, &testerR2Run)
 	if testerR2Run.err != nil {
 		return IssueReport{}, testerR2Run.err
 	}
