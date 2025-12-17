@@ -140,6 +140,10 @@ func TestBuildScoutPromptWritesToPath(t *testing.T) {
 		"Write the analysis to:",
 		"/workspace/change_analysis.md",
 		"# CHANGE ANALYSIS",
+		"High-Risk Areas (ranked)",
+		"Before -> After",
+		"git merge-base HEAD BASE_BRANCH",
+		"git diff --name-status MERGE_BASE_SHA",
 	}
 	for _, needle := range required {
 		if !strings.Contains(prompt, needle) {
