@@ -125,9 +125,13 @@ func (r *Runner) Run() (*Result, error) {
 		Issues:       []IssueReport{},
 	}
 
-	scoutBranchID, analysisPath, err := r.runScout(parent)
-	if err != nil {
-		return nil, err
+	scoutBranchID := parent
+	analysisPath := ""
+	if branchID, path, err := r.runScout(parent); err != nil {
+		logx.Warningf("SCOUT soft-failed; continuing without change analysis. err=%v", err)
+	} else {
+		scoutBranchID = branchID
+		analysisPath = path
 	}
 
 	reviewLog, err := r.runSingleReview(scoutBranchID, analysisPath)
