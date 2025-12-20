@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"review_agent/internal/config"
 	"review_agent/internal/logx"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -64,17 +65,32 @@ func (t *BranchTracker) Range() map[string]string {
 
 type ToolHandler struct {
 	client        agentClient
+	cfg           *config.AgentConfig // nil = use defaults (for tests)
 	defaultProj   string
 	branchTracker *BranchTracker
 	workspaceDir  string
 }
 
+// NewToolHandler creates a handler without config. Uses hardcoded defaults.
+// Kept for backward compatibility with tests.
 func NewToolHandler(client agentClient, defaultProject string, startBranch string, workspaceDir string) *ToolHandler {
 	return &ToolHandler{
 		client:        client,
+		cfg:           nil,
 		defaultProj:   defaultProject,
 		branchTracker: NewBranchTracker(startBranch),
 		workspaceDir:  strings.TrimSpace(workspaceDir),
+	}
+}
+
+// NewToolHandlerWithConfig creates a handler with config. Use this in production.
+func NewToolHandlerWithConfig(client agentClient, cfg *config.AgentConfig, startBranch string) *ToolHandler {
+	return &ToolHandler{
+		client:        client,
+		cfg:           cfg,
+		defaultProj:   cfg.ProjectName,
+		branchTracker: NewBranchTracker(startBranch),
+		workspaceDir:  strings.TrimSpace(cfg.WorkspaceDir),
 	}
 }
 
@@ -282,15 +298,27 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 	if branchID == "" {
 		return nil, ToolExecutionError{Msg: "`branch_id` is required"}
 	}
-	timeout := 1800.0
+	// Defaults for tests or when config is nil
+	timeout := 3600.0
+	poll := 3.0
+	maxPoll := 30.0
+	backoffFactor := 1.5
+
+	// Use config values if available
+	if h.cfg != nil {
+		timeout = h.cfg.PollTimeout.Seconds()
+		poll = h.cfg.PollInitial.Seconds()
+		maxPoll = h.cfg.PollMax.Seconds()
+		backoffFactor = h.cfg.PollBackoffFactor
+	}
+
+	// Tool arguments can override config
 	if v, ok := arguments["timeout_seconds"].(float64); ok && v > 0 {
 		timeout = v
 	}
-	poll := 3.0
 	if v, ok := arguments["poll_interval_seconds"].(float64); ok && v > 0 {
 		poll = v
 	}
-	maxPoll := 30.0
 	if v, ok := arguments["max_poll_interval_seconds"].(float64); ok && v >= poll {
 		maxPoll = v
 	}
@@ -378,8 +406,7 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 		}
 		logx.Infof("Branch %s still active (status=%s). Sleeping %.1fs.", branchID, status, sleep.Seconds())
 		time.Sleep(sleep)
-		// exponential-ish backoff
-		sleep = time.Duration(minFloat(float64(sleep/time.Second)*1.5, maxPoll)) * time.Second
+		sleep = time.Duration(minFloat(float64(sleep/time.Second)*backoffFactor, maxPoll)) * time.Second
 	}
 }
 

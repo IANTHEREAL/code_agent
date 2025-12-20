@@ -62,7 +62,7 @@ func main() {
 
 	brain := b.NewLLMBrain(conf.AzureAPIKey, conf.AzureEndpoint, conf.AzureDeployment, conf.AzureAPIVersion, 3)
 	mcp := t.NewMCPClient(conf.MCPBaseURL)
-	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent, conf.WorkspaceDir)
+	handler := t.NewToolHandlerWithConfig(mcp, &conf, *parent)
 
 	var streamer *streaming.JSONStreamer
 	if streamEnabled {
