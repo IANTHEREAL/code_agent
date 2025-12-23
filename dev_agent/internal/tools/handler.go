@@ -31,7 +31,7 @@ const (
 	reviewArtifactName         = "code_review.log"
 	reviewMaxAttempts          = 3
 	instructionFinishedWithErr = "FINISHED_WITH_ERROR"
-	defaultPollTimeout         = 30 * time.Minute
+	defaultPollTimeout         = 60 * time.Minute
 	defaultPollInitial         = 3 * time.Second
 	defaultPollMax             = 30 * time.Second
 	defaultPollBackoff         = 1.5

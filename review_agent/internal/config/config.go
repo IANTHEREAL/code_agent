@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const minPollTimeoutSeconds = 1800
+const minPollTimeoutSeconds = 3600
 const minPollTimeout = time.Duration(minPollTimeoutSeconds) * time.Second
 
 type AgentConfig struct {
