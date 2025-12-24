@@ -16,6 +16,8 @@ func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
 		"Review the code changes against the base branch",
 		"git merge-base HEAD BASE_BRANCH",
 		"git diff MERGE_BASE_SHA",
+		"cargo check --all-targets",
+		"cargo clippy --all-targets",
 		"Provide prioritized, actionable findings",
 	}
 
@@ -52,6 +54,8 @@ func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
 		"Chesterton's Fence",
 		"VERDICT",
 		"Change Analysis at:",
+		"cargo check --all-targets",
+		"cargo clippy --all-targets",
 	}
 	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
@@ -68,7 +72,9 @@ func TestBuildTesterPromptContainsRoleDirectives(t *testing.T) {
 		"Simulate a QA engineer",
 		"MUST actually run code",
 		"Do NOT run full test suites",
-		"cargo test",
+		"Do NOT run `cargo test`",
+		"cargo check --all-targets",
+		"cargo clippy --all-targets",
 		"Do NOT fabricate",
 		"VERDICT",
 		"include the key command or code snippet",
@@ -146,6 +152,8 @@ func TestBuildScoutPromptWritesToPath(t *testing.T) {
 		"Before -> After",
 		"git merge-base HEAD BASE_BRANCH",
 		"git diff --name-status MERGE_BASE_SHA",
+		"cargo check --all-targets",
+		"cargo clippy --all-targets",
 	}
 	for _, needle := range required {
 		if !strings.Contains(prompt, needle) {
