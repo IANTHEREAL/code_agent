@@ -50,7 +50,7 @@ func TestFromEnv_ClampsPollTimeoutBelow30Minutes(t *testing.T) {
 
 func TestFromEnv_RespectsLargerPollTimeout(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("MCP_POLL_TIMEOUT_SECONDS", "3600")
+	t.Setenv("MCP_POLL_TIMEOUT_SECONDS", "7200")
 
 	conf, err := FromEnv()
 	if err != nil {
@@ -60,4 +60,3 @@ func TestFromEnv_RespectsLargerPollTimeout(t *testing.T) {
 		t.Fatalf("expected PollTimeout 1h, got %s", conf.PollTimeout)
 	}
 }
-
