@@ -67,6 +67,8 @@ func TestBuildTesterPromptContainsRoleDirectives(t *testing.T) {
 		universalStudyLine,
 		"Simulate a QA engineer",
 		"MUST actually run code",
+		"Do NOT run full test suites",
+		"cargo test",
 		"Do NOT fabricate",
 		"VERDICT",
 		"include the key command or code snippet",
