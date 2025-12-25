@@ -17,6 +17,7 @@ const outputAwarenessBlock = "**OUTPUT AWARENESS**\n" +
 const universalStudyLine = "Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.\n\n" +
 	"**SCENARIO VALIDATION**\n" +
 	"- Before reporting an issue, confirm the described trigger scenario is real and reachable in current code paths\n" +
+	"- We encourage deep exploration of relevant execution paths and scenarios\n" +
 	"- Use actual usage, design intent, and code comments to reason about expected behavior and performance tradeoffs\n" +
 	"- If a behavior is by design (e.g., a performance tradeoff), call that out instead of proposing a fix\n" +
 	"- Do not invent unsupported or hypothetical scenarios"
