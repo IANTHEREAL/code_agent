@@ -16,9 +16,12 @@ func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
 		"Review the code changes against the base branch",
 		"git merge-base HEAD BASE_BRANCH",
 		"git diff MERGE_BASE_SHA",
+		"Analyze the code changes and identify critical P0/P1 issues only.",
+		"FINAL RESPONSE:",
+		"critical P0/P1 issue report",
+		"Do not include non-critical issues or general commentary.",
 		"cargo check --all-targets",
 		"cargo clippy --all-targets",
-		"Provide prioritized, actionable findings",
 		p0p1FocusBlock,
 	}
 
