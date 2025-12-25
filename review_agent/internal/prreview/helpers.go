@@ -35,8 +35,6 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
 	sb.WriteString("- You MAY run EXTREMELY SMALL, targeted tests if absolutely necessary to verify a specific issue\n")
 	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
-	sb.WriteString("  * Limit to 0-2 tests maximum, and only if directly related to the issue being reviewed\n")
-	sb.WriteString("- Prefer code reading and static analysis. Only run tests when static analysis is insufficient.\n")
 	sb.WriteString("- Keep any commands narrowly targeted to the specific file or function being reviewed.\n\n")
 	return sb.String()
 }
@@ -70,7 +68,6 @@ func buildScoutPrompt(task string, outputPath string) string {
 	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
 	sb.WriteString("- Prefer static analysis and code reading. You MAY run EXTREMELY SMALL, targeted tests if absolutely necessary\n")
 	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
-	sb.WriteString("  * Limit to 0-2 tests maximum, and only if directly related to verifying a specific change\n")
 	sb.WriteString("- If you must verify something, use the smallest possible targeted command for that specific file/function only.\n\n")
 	sb.WriteString("Write the analysis to: ")
 	sb.WriteString(outputPath)
