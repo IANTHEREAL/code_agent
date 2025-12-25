@@ -7,7 +7,19 @@ import (
 	"strings"
 )
 
-const universalStudyLine = "Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out."
+const outputAwarenessBlock = "**OUTPUT AWARENESS**\n" +
+	"- Before running any command, consider whether output volume could explode the context window\n" +
+	"- Use quiet flags, redirect to a file, then extract only needed lines (e.g., `rg -n \"error|panic\"`)\n" +
+	"- Avoid `tee` unless you explicitly need a log file; if used, do not paste full logs\n" +
+	"- Do NOT `cat` large logs; quote only minimal relevant snippets\n" +
+	"- Be extra careful with `cargo run` and `cargo test` output volume"
+
+const universalStudyLine = "Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.\n\n" +
+	"**SCENARIO VALIDATION**\n" +
+	"- Before reporting an issue, confirm the described trigger scenario is real and reachable in current code paths\n" +
+	"- Use actual usage, design intent, and code comments to reason about expected behavior and performance tradeoffs\n" +
+	"- If a behavior is by design (e.g., a performance tradeoff), call that out instead of proposing a fix\n" +
+	"- Do not invent unsupported or hypothetical scenarios"
 
 func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	var sb strings.Builder
@@ -30,12 +42,15 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	sb.WriteString("     - Run: git diff MERGE_BASE_SHA\n")
 	sb.WriteString("     - Also run: git diff --name-status MERGE_BASE_SHA\n\n")
 	sb.WriteString("  3) Provide prioritized, actionable findings based on that diff (correctness, bugs, security, edge cases, API/contracts, tests, UX where relevant). Include file/line references when possible.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
 	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
 	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
 	sb.WriteString("- You MAY run EXTREMELY SMALL, targeted tests if absolutely necessary to verify a specific issue\n")
 	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
 	sb.WriteString("- Keep any commands narrowly targeted to the specific file or function being reviewed.\n\n")
+
 	return sb.String()
 }
 
@@ -63,6 +78,8 @@ func buildScoutPrompt(task string, outputPath string) string {
 	sb.WriteString("- If defaults/contracts/config/env/flags changed, treat it as high risk; and find likely call sites.\n")
 	sb.WriteString("- After reviewing the full diff, label KEY vs secondary points; deep dive ALL KEY items and keep secondary brief.\n")
 	sb.WriteString("- Include file:line or symbol anchors for key points.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
 	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
 	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
@@ -119,6 +136,8 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
 	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim is real.\n")
 	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
 	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
 	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
@@ -178,6 +197,8 @@ func buildTesterPrompt(task string, issueText string, changeAnalysisPath string)
 	sb.WriteString("- Collect real error messages (not assumptions)\n\n")
 	sb.WriteString("CRITICAL: You MUST actually run code to collect evidence.\n")
 	sb.WriteString("Do NOT fabricate test results or mock behavior.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
 	sb.WriteString("- Do NOT run `cargo test` - this runs ALL tests in the project and is extremely slow (can take hours)\n")
 	sb.WriteString("- Do NOT run `cargo test --all-targets` or any variant that runs multiple test suites\n")
@@ -229,6 +250,8 @@ func buildExchangePrompt(role string, task string, issueText string, changeAnaly
 	sb.WriteString("PEER'S OPINION:\n<<<PEER>>>\n")
 	sb.WriteString(peerOpinion)
 	sb.WriteString("\n<<<END PEER>>>\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("ROLE REMINDER:\n")
 	switch normalizedRole {
 	case "reviewer":
@@ -240,6 +263,7 @@ func buildExchangePrompt(role string, task string, issueText string, changeAnaly
 		sb.WriteString("- **CRITICAL: DO NOT run `cargo test`** - use only extremely small, targeted test batches\n")
 		sb.WriteString("- Run 0-3 tests maximum, each directly verifying the issueText claim\n")
 		sb.WriteString("- Use `cargo test <specific_test_function_name>` to run ONLY one test at a time\n")
+		sb.WriteString("- Before any command, check output volume; use quiet flags, redirect+filter, and avoid `cat` on large logs\n")
 	default:
 		sb.WriteString("- Stay consistent with your original role responsibilities.\n")
 	}
