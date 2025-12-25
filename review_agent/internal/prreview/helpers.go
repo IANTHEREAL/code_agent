@@ -7,7 +7,20 @@ import (
 	"strings"
 )
 
-const universalStudyLine = "Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out."
+const outputAwarenessBlock = "**OUTPUT AWARENESS**\n" +
+	"- Before running any command, consider whether output volume could explode the context window\n" +
+	"- Use quiet flags, redirect to a file, then extract only needed lines (e.g., `rg -n \"error|panic\"`)\n" +
+	"- Avoid `tee` unless you explicitly need a log file; if used, do not paste full logs\n" +
+	"- Do NOT `cat` large logs; quote only minimal relevant snippets\n" +
+	"- Be extra careful with `cargo run` and `cargo test` output volume"
+
+const universalStudyLine = "Read as much as you can, you have unlimited read quotas and available contexts. When you are not sure about something, you must study the code until you figure out.\n\n" +
+	"**SCENARIO VALIDATION**\n" +
+	"- Before reporting an issue, confirm the described trigger scenario is real and reachable in current code paths\n" +
+	"- We encourage deep exploration of relevant execution paths and scenarios\n" +
+	"- Use actual usage, design intent, and code comments to reason about expected behavior and performance tradeoffs\n" +
+	"- If a behavior is by design (e.g., a performance tradeoff), call that out instead of proposing a fix\n" +
+	"- Do not invent unsupported or hypothetical scenarios"
 
 func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	var sb strings.Builder
@@ -30,8 +43,15 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	sb.WriteString("     - Run: git diff MERGE_BASE_SHA\n")
 	sb.WriteString("     - Also run: git diff --name-status MERGE_BASE_SHA\n\n")
 	sb.WriteString("  3) Provide prioritized, actionable findings based on that diff (correctness, bugs, security, edge cases, API/contracts, tests, UX where relevant). Include file/line references when possible.\n\n")
-	sb.WriteString("Do NOT run broad checks and tests like `cargo check --all-targets`, `cargo clippy --all-targets`, or `cargo test` for Rust projects.\n")
-	sb.WriteString("They are slow and often fail; keep any commands narrowly targeted to the specific target.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
+	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
+	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
+	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
+	sb.WriteString("- You MAY run EXTREMELY SMALL, targeted tests if absolutely necessary to verify a specific issue\n")
+	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
+	sb.WriteString("- Keep any commands narrowly targeted to the specific file or function being reviewed.\n\n")
+
 	return sb.String()
 }
 
@@ -59,9 +79,14 @@ func buildScoutPrompt(task string, outputPath string) string {
 	sb.WriteString("- If defaults/contracts/config/env/flags changed, treat it as high risk; and find likely call sites.\n")
 	sb.WriteString("- After reviewing the full diff, label KEY vs secondary points; deep dive ALL KEY items and keep secondary brief.\n")
 	sb.WriteString("- Include file:line or symbol anchors for key points.\n\n")
-	sb.WriteString("- Note: You do NOT need to run tests. Focus on static analysis and code reading.\n")
-	sb.WriteString("- Do NOT run broad checks and tests like `cargo check --all-targets`, `cargo clippy --all-targets`, or `cargo test` for Rust projects.\n")
-	sb.WriteString("- If you run anything, keep it narrowly targeted to the specific issue.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
+	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
+	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
+	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
+	sb.WriteString("- Prefer static analysis and code reading. You MAY run EXTREMELY SMALL, targeted tests if absolutely necessary\n")
+	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
+	sb.WriteString("- If you must verify something, use the smallest possible targeted command for that specific file/function only.\n\n")
 	sb.WriteString("Write the analysis to: ")
 	sb.WriteString(outputPath)
 	sb.WriteString("\n\n")
@@ -111,10 +136,17 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n\n")
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
 	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim is real.\n")
-	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n")
-	sb.WriteString("- Do NOT claim you ran code/tests; rely on code reading and reasoning only.\n\n")
-	sb.WriteString("Do NOT run broad checks like `cargo check --all-targets` or `cargo clippy --all-targets`.\n")
-	sb.WriteString("Keep this reasoning-only and narrowly focused on the issue.\n\n")
+	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
+	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
+	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
+	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
+	sb.WriteString("- This role primarily uses code reading, logic analysis, and architectural understanding.\n")
+	sb.WriteString("- You MAY run EXTREMELY SMALL, targeted tests (0-2 tests max) ONLY if static analysis cannot determine the issue\n")
+	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
+	sb.WriteString("  * Only run tests if they directly verify the specific issueText claim\n")
+	sb.WriteString("- Prefer static analysis. Only run tests when absolutely necessary for verification.\n\n")
 	sb.WriteString("REQUIRED: After the verdict line, begin with a single-sentence restatement of the issueText claim you are judging.\n\n")
 	sb.WriteString("Their task:\n")
 	sb.WriteString("- Analyze the code logic for correctness\n")
@@ -166,11 +198,19 @@ func buildTesterPrompt(task string, issueText string, changeAnalysisPath string)
 	sb.WriteString("- Collect real error messages (not assumptions)\n\n")
 	sb.WriteString("CRITICAL: You MUST actually run code to collect evidence.\n")
 	sb.WriteString("Do NOT fabricate test results or mock behavior.\n\n")
-	sb.WriteString("Do NOT run full test suites just to be safe. Use the smallest targeted test(s) that confirm the issue.\n")
-	sb.WriteString("Do NOT run `cargo test`.\n")
-	sb.WriteString("If a test runner defaults to all tests, use a more targeted tool or a narrowly scoped command instead.\n\n")
-	sb.WriteString("Do NOT run broad checks like `cargo check --all-targets` or `cargo clippy --all-targets`.\n")
-	sb.WriteString("They are slow and often fail; keep any commands narrowly targeted to the specific target.\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
+	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
+	sb.WriteString("- Do NOT run `cargo test` - this runs ALL tests in the project and is extremely slow (can take hours)\n")
+	sb.WriteString("- Do NOT run `cargo test --all-targets` or any variant that runs multiple test suites\n")
+	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n\n")
+	sb.WriteString("**REQUIRED: Use ONLY extremely small, targeted test batches**\n")
+	sb.WriteString("- Write and run the SMALLEST possible test that directly reproduces the specific issueText claim\n")
+	sb.WriteString("- For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
+	sb.WriteString("- If you need to test a specific module, use `cargo test --lib` or `cargo test --bin <binary_name>` to limit scope\n")
+	sb.WriteString("- If a test runner defaults to all tests, you MUST use a more targeted command or create a minimal standalone test script\n")
+	sb.WriteString("- Your goal is to verify the specific issueText claim with MINIMAL test execution, NOT comprehensive test coverage\n")
+	sb.WriteString("- Before running any test, ask: \"Is this the absolute minimum needed to verify the issue?\"\n\n")
 	sb.WriteString("EVIDENCE STANDARDS:\n")
 	sb.WriteString("✓ Valid: Actual test output, real error messages, execution traces\n")
 	sb.WriteString("✗ Invalid: Self-created mocks, assumed behavior, \"should\" statements\n\n")
@@ -211,6 +251,8 @@ func buildExchangePrompt(role string, task string, issueText string, changeAnaly
 	sb.WriteString("PEER'S OPINION:\n<<<PEER>>>\n")
 	sb.WriteString(peerOpinion)
 	sb.WriteString("\n<<<END PEER>>>\n\n")
+	sb.WriteString(outputAwarenessBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("ROLE REMINDER:\n")
 	switch normalizedRole {
 	case "reviewer":
@@ -219,6 +261,10 @@ func buildExchangePrompt(role string, task string, issueText string, changeAnaly
 	case "tester":
 		sb.WriteString("- You remain the tester. You must run code and capture actual execution output.\n")
 		sb.WriteString("- Provide real execution evidence such as logs or failing test output.\n")
+		sb.WriteString("- **CRITICAL: DO NOT run `cargo test`** - use only extremely small, targeted test batches\n")
+		sb.WriteString("- Run 0-3 tests maximum, each directly verifying the issueText claim\n")
+		sb.WriteString("- Use `cargo test <specific_test_function_name>` to run ONLY one test at a time\n")
+		sb.WriteString("- Before any command, check output volume; use quiet flags, redirect+filter, and avoid `cat` on large logs\n")
 	default:
 		sb.WriteString("- Stay consistent with your original role responsibilities.\n")
 	}
