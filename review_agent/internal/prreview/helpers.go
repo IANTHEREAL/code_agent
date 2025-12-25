@@ -22,6 +22,18 @@ const universalStudyLine = "Read as much as you can, you have unlimited read quo
 	"- If a behavior is by design (e.g., a performance tradeoff), call that out instead of proposing a fix\n" +
 	"- Do not invent unsupported or hypothetical scenarios"
 
+const p0p1FocusBlock = "**P0/P1 FOCUS**\n" +
+	"- Report ONLY P0/P1 issues\n" +
+	"- Ignore general issues (style, refactors, maintainability, low-impact edge cases)\n" +
+	"- For each reported issue, include severity (P0/P1), impact analysis, and a plausible fix\n" +
+	"- If impact is limited or the behavior is a deliberate tradeoff/by design, do NOT report it\n" +
+	"- If no P0/P1 issues exist, write exactly: \"No P0/P1 issues found\"\n"
+
+const p0p1VerdictGateBlock = "**P0/P1 SEVERITY GATE**\n" +
+	"- Your verdict is about whether issueText is a real P0/P1 issue, not just whether a behavior exists\n" +
+	"- Evaluate impact and fix feasibility; if impact is limited or behavior is a deliberate tradeoff/by design, REJECT\n" +
+	"- If only risky or unreasonable fixes exist, REJECT\n"
+
 func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	var sb strings.Builder
 	sb.WriteString("Task: ")
@@ -43,6 +55,8 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	sb.WriteString("     - Run: git diff MERGE_BASE_SHA\n")
 	sb.WriteString("     - Also run: git diff --name-status MERGE_BASE_SHA\n\n")
 	sb.WriteString("  3) Provide prioritized, actionable findings based on that diff (correctness, bugs, security, edge cases, API/contracts, tests, UX where relevant). Include file/line references when possible.\n\n")
+	sb.WriteString(p0p1FocusBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString(outputAwarenessBlock)
 	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
@@ -135,8 +149,10 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("YOUR ROLE: Analyze code logic to determine if this is a valid bug.\n\n")
 	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n\n")
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
-	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim is real.\n")
+	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) is a real P0/P1 issue.\n")
 	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n\n")
+	sb.WriteString(p0p1VerdictGateBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString(outputAwarenessBlock)
 	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
@@ -187,9 +203,11 @@ func buildTesterPrompt(task string, issueText string, changeAnalysisPath string)
 	sb.WriteString("YOUR ROLE: Reproduce the issue by actually running code.\n\n")
 	sb.WriteString("Simulate a QA engineer who verifies bugs by running real tests.\n\n")
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
-	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim exists in reality.\n")
+	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) is a real P0/P1 issue.\n")
 	sb.WriteString("- Your reproduction MUST target that claim directly.\n")
 	sb.WriteString("- If you find other failures/issues that are not the issueText claim, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n\n")
+	sb.WriteString(p0p1VerdictGateBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("REQUIRED: After the verdict line, begin with a single-sentence restatement of the issueText claim you are testing.\n\n")
 	sb.WriteString("Their task:\n")
 	sb.WriteString("- Attempt to reproduce the reported issue\n")
@@ -270,9 +288,11 @@ func buildExchangePrompt(role string, task string, issueText string, changeAnaly
 	}
 	sb.WriteString("\n")
 	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
-	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) claim is real.\n")
+	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) is a real P0/P1 issue.\n")
 	sb.WriteString("- If either opinion mentions other issues, treat them as out of scope: include them under \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n")
 	sb.WriteString("- You may change your verdict ONLY based on evidence/reasoning about the issueText claim itself.\n\n")
+	sb.WriteString(p0p1VerdictGateBlock)
+	sb.WriteString("\n\n")
 	sb.WriteString("ROUND 2 REQUIREMENT (KISS):\n")
 	sb.WriteString("Immediately after the verdict line, include these two lines:\n")
 	sb.WriteString("Claim: <1 sentence restatement of the issueText claim you are judging>\n")

@@ -19,6 +19,7 @@ func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
 		"cargo check --all-targets",
 		"cargo clippy --all-targets",
 		"Provide prioritized, actionable findings",
+		p0p1FocusBlock,
 	}
 
 	for _, req := range required {
@@ -54,6 +55,7 @@ func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
 		"Chesterton's Fence",
 		"VERDICT",
 		"Change Analysis at:",
+		p0p1VerdictGateBlock,
 		"cargo check --all-targets",
 		"cargo clippy --all-targets",
 	}
@@ -73,6 +75,7 @@ func TestBuildTesterPromptContainsRoleDirectives(t *testing.T) {
 		"MUST actually run code",
 		"Do NOT run full test suites",
 		"Do NOT run `cargo test`",
+		p0p1VerdictGateBlock,
 		"cargo check --all-targets",
 		"cargo clippy --all-targets",
 		"Do NOT fabricate",
@@ -94,6 +97,7 @@ func TestBuildExchangePromptIncludesSelfPeerAndReviewerGuidance(t *testing.T) {
 		"peer said hello",
 		"YOUR PREVIOUS OPINION",
 		"PEER'S OPINION",
+		p0p1VerdictGateBlock,
 		"logic analysis",
 		"Do NOT claim you ran tests",
 	}
@@ -111,6 +115,7 @@ func TestBuildExchangePromptProvidesTesterGuidance(t *testing.T) {
 		"peer logic view",
 		"YOUR PREVIOUS OPINION",
 		"PEER'S OPINION",
+		p0p1VerdictGateBlock,
 		"run code",
 		"real execution evidence",
 	}
