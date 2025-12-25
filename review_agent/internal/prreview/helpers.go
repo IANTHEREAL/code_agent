@@ -46,7 +46,7 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 		sb.WriteString(changeAnalysisPath)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString("Review the code changes against the base branch 'BASE_BRANCH' = main or master (PR-style).\n\n")
+	sb.WriteString("Review the code changes against the base branch 'BASE_BRANCH' (mentioned by task or extracted from PR using `gh`).\n\n")
 	sb.WriteString("  1) Find the merge-base SHA for this comparison:\n")
 	sb.WriteString("     - Try: git merge-base HEAD BASE_BRANCH\n")
 	sb.WriteString("     - If that fails, try: git merge-base HEAD \"BASE_BRANCH@{upstream}\"\n")
