@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-const outputAwarenessBlock = "**OUTPUT AWARENESS**\n" +
+const outputAwarenessBlock = "**COMMAND OUTPUT AWARENESS**\n" +
 	"- Before running any command, consider whether output volume could explode the context window\n" +
 	"- Use quiet flags, redirect to a file, then extract only needed lines (e.g., `rg -n \"error|panic\"`)\n" +
 	"- Avoid `tee` unless you explicitly need a log file; if used, do not paste full logs\n" +

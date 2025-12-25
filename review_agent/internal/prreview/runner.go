@@ -29,6 +29,7 @@ type Options struct {
 	ProjectName    string
 	ParentBranchID string
 	WorkspaceDir   string
+	SkipScout      bool
 }
 
 // Result captures the high-level outcome plus supporting artifacts.
@@ -82,6 +83,8 @@ type Runner struct {
 
 	// alignmentOverride is a test hook to avoid network calls while exercising confirmIssue logic.
 	alignmentOverride func(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error)
+	// hasRealIssueOverride is a test hook to avoid network calls in Run().
+	hasRealIssueOverride func(reportText string) (bool, error)
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -127,11 +130,15 @@ func (r *Runner) Run() (*Result, error) {
 
 	scoutBranchID := parent
 	analysisPath := ""
-	if branchID, path, err := r.runScout(parent); err != nil {
-		logx.Warningf("SCOUT soft-failed; continuing without change analysis. err=%v", err)
+	if r.opts.SkipScout {
+		logx.Infof("Skipping scout stage by request.")
 	} else {
-		scoutBranchID = branchID
-		analysisPath = path
+		if branchID, path, err := r.runScout(parent); err != nil {
+			logx.Warningf("SCOUT soft-failed; continuing without change analysis. err=%v", err)
+		} else {
+			scoutBranchID = branchID
+			analysisPath = path
+		}
 	}
 
 	reviewLog, err := r.runSingleReview(scoutBranchID, analysisPath)
@@ -469,6 +476,9 @@ func (r *Runner) runScout(parentBranchID string) (string, string, error) {
 }
 
 func (r *Runner) hasRealIssue(reportText string) (bool, error) {
+	if r.hasRealIssueOverride != nil {
+		return r.hasRealIssueOverride(reportText)
+	}
 	prompt := buildHasRealIssuePrompt(reportText)
 	resp, err := r.brain.Complete([]b.ChatMessage{
 		{Role: "system", Content: "Analyze code review reports. Reply only with JSON."},

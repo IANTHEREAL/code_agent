@@ -22,7 +22,7 @@ func setRequiredEnv(t *testing.T) {
 	t.Setenv("GIT_AUTHOR_EMAIL", "test@example.com")
 }
 
-func TestFromEnv_DefaultPollTimeoutIs30Minutes(t *testing.T) {
+func TestFromEnv_DefaultPollTimeoutIs2Hours(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("MCP_POLL_TIMEOUT_SECONDS", "")
 
@@ -30,12 +30,12 @@ func TestFromEnv_DefaultPollTimeoutIs30Minutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv returned error: %v", err)
 	}
-	if conf.PollTimeout != 30*time.Minute {
-		t.Fatalf("expected default PollTimeout 30m, got %s", conf.PollTimeout)
+	if conf.PollTimeout != 2*time.Hour {
+		t.Fatalf("expected default PollTimeout 2h, got %s", conf.PollTimeout)
 	}
 }
 
-func TestFromEnv_ClampsPollTimeoutBelow30Minutes(t *testing.T) {
+func TestFromEnv_ClampsPollTimeoutBelow2Hours(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("MCP_POLL_TIMEOUT_SECONDS", "600")
 
@@ -43,20 +43,20 @@ func TestFromEnv_ClampsPollTimeoutBelow30Minutes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FromEnv returned error: %v", err)
 	}
-	if conf.PollTimeout != 30*time.Minute {
-		t.Fatalf("expected PollTimeout clamped to 30m, got %s", conf.PollTimeout)
+	if conf.PollTimeout != 2*time.Hour {
+		t.Fatalf("expected PollTimeout clamped to 2h, got %s", conf.PollTimeout)
 	}
 }
 
 func TestFromEnv_RespectsLargerPollTimeout(t *testing.T) {
 	setRequiredEnv(t)
-	t.Setenv("MCP_POLL_TIMEOUT_SECONDS", "7200")
+	t.Setenv("MCP_POLL_TIMEOUT_SECONDS", "10800")
 
 	conf, err := FromEnv()
 	if err != nil {
 		t.Fatalf("FromEnv returned error: %v", err)
 	}
-	if conf.PollTimeout != time.Hour {
-		t.Fatalf("expected PollTimeout 1h, got %s", conf.PollTimeout)
+	if conf.PollTimeout != 3*time.Hour {
+		t.Fatalf("expected PollTimeout 3h, got %s", conf.PollTimeout)
 	}
 }

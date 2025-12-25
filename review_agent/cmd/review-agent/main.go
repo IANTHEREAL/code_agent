@@ -22,6 +22,7 @@ func main() {
 	project := flag.String("project-name", "", "Override project name")
 	headless := flag.Bool("headless", false, "Headless mode (no interactive prompt)")
 	streamJSON := flag.Bool("stream-json", false, "Emit workflow events as NDJSON (implies headless)")
+	skipScout := flag.Bool("skip-scout", false, "Skip the scout change analysis stage")
 	flag.Parse()
 
 	streamEnabled := streamJSON != nil && *streamJSON
@@ -75,6 +76,7 @@ func main() {
 		ProjectName:    conf.ProjectName,
 		ParentBranchID: *parent,
 		WorkspaceDir:   conf.WorkspaceDir,
+		SkipScout:      *skipScout,
 	}
 	runner, err := prreview.NewRunner(brain, handler, streamer, opts)
 	if err != nil {
