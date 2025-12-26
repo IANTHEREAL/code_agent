@@ -30,6 +30,7 @@ type Options struct {
 	ParentBranchID string
 	WorkspaceDir   string
 	SkipScout      bool
+	SkipTester     bool
 }
 
 // Result captures the high-level outcome plus supporting artifacts.
@@ -255,6 +256,30 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string, changeAnal
 		transcript.VerdictReason = decision.Reason
 		out.transcript = transcript
 		out.verdict = decision
+	}
+
+	if r.opts.SkipTester {
+		var reviewerRun roleRun
+		runRoleWithVerdict("reviewer", startBranchID, &reviewerRun)
+		if reviewerRun.err != nil {
+			return IssueReport{}, reviewerRun.err
+		}
+		reviewer := reviewerRun.transcript
+		reviewerVerdict := reviewerRun.verdict
+		report := IssueReport{
+			IssueText:              issueText,
+			Alpha:                  reviewer,
+			ReviewerRound1BranchID: reviewer.BranchID,
+			ExchangeRounds:         0,
+		}
+		if reviewerVerdict.Verdict == "confirmed" {
+			report.Status = commentConfirmed
+			report.VerdictExplanation = "SkipTester enabled: Reviewer confirmed the issue."
+		} else {
+			report.Status = commentUnresolved
+			report.VerdictExplanation = "SkipTester enabled: Reviewer rejected the issue."
+		}
+		return report, nil
 	}
 
 	// Round 1: Independent review (parallel + double-blind fork)

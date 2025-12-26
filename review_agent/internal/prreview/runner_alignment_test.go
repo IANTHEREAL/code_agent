@@ -118,6 +118,47 @@ func TestConfirmIssueDoesNotConfirmWhenTranscriptsMisaligned(t *testing.T) {
 	}
 }
 
+func TestConfirmIssueSkipsTesterWhenFlagSet(t *testing.T) {
+	reviewer := "# VERDICT: CONFIRMED\n\nClaim: issueText describes defect A\nAnchor: alpha.go:10\n\n## Reasoning\nConfirmed Defect A."
+	client := newFakeAgentClient(reviewer, "", "", "")
+	handler := tools.NewToolHandler(client, "proj", "start", "")
+	runner, err := NewRunner(&b.LLMBrain{}, handler, nil, Options{
+		Task:           "task",
+		ProjectName:    "proj",
+		ParentBranchID: "start",
+		WorkspaceDir:   "",
+		SkipTester:     true,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+
+	report, err := runner.confirmIssue("ISSUE: example", "start", "")
+	if err != nil {
+		t.Fatalf("confirmIssue error: %v", err)
+	}
+	if report.Status != commentConfirmed {
+		t.Fatalf("expected confirmed when reviewer confirms with skip tester, got %q", report.Status)
+	}
+	if report.ExchangeRounds != 0 {
+		t.Fatalf("expected 0 exchange rounds, got %d", report.ExchangeRounds)
+	}
+	if report.TesterRound1BranchID != "" || report.TesterRound2BranchID != "" {
+		t.Fatalf("expected no tester branch ids, got r1=%q r2=%q", report.TesterRound1BranchID, report.TesterRound2BranchID)
+	}
+
+	client.mu.Lock()
+	calls := append([]agentCall(nil), client.calls...)
+	client.mu.Unlock()
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 agent call (reviewer only), got %d: %#v", len(calls), calls)
+	}
+	if calls[0].classifiedRole != "reviewer" || calls[0].classifiedRound != 1 {
+		t.Fatalf("expected reviewer round1 call, got role=%q round=%d", calls[0].classifiedRole, calls[0].classifiedRound)
+	}
+}
+
 func TestConfirmIssueUsesDoubleBlindBranchTopology(t *testing.T) {
 	reviewerR1 := "# VERDICT: REJECTED\n\nClaim: something\nAnchor: unknown\n\n## Reasoning\nNo."
 	testerR1 := "# VERDICT: CONFIRMED\n\nClaim: something\nAnchor: cmd\n\n## Reproduction Steps\nYes."
