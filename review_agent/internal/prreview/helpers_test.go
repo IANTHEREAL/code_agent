@@ -54,8 +54,9 @@ func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
 	requiredPhrases := []string{
 		"REVIEWER",
 		universalStudyLine,
-		"Simulate a group of senior programmers",
-		"Chesterton's Fence",
+		"opponent's Issue List",
+		"adversarial / rebuttal-style review",
+		"Severity:",
 		"VERDICT",
 		"Change Analysis at:",
 		p0p1VerdictGateBlock,
