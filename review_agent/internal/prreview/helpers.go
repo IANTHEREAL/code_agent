@@ -171,6 +171,8 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("RESPONSE FORMAT:\n")
 	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n\n")
 	sb.WriteString("Then provide:\n")
+	sb.WriteString("## Issue Description\n")
+	sb.WriteString("<A concise summary of the issue you are verifying. Restate the key claim from the issueText above.>\n\n")
 	sb.WriteString("## Reasoning\n")
 	sb.WriteString("<Your analysis of the code logic>\n\n")
 	sb.WriteString("## Evidence\n")
@@ -224,6 +226,8 @@ func buildTesterPrompt(task string, issueText string, changeAnalysisPath string)
 	sb.WriteString("RESPONSE FORMAT:\n")
 	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n\n")
 	sb.WriteString("Then provide:\n")
+	sb.WriteString("## Issue Description\n")
+	sb.WriteString("<A concise summary of the issue you are verifying. Restate the key claim from the issueText above.>\n\n")
 	sb.WriteString("## Reproduction Steps\n")
 	sb.WriteString("<What you did to reproduce>\n\n")
 	sb.WriteString("## Test Evidence\n")
@@ -295,6 +299,8 @@ func buildExchangePrompt(role string, task string, issueText string, changeAnaly
 	sb.WriteString("RESPONSE FORMAT:\n")
 	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n\n")
 	sb.WriteString("Then provide:\n")
+	sb.WriteString("## Issue Description\n")
+	sb.WriteString("<A concise summary of the issue you are verifying. Restate the key claim from the issueText above.>\n\n")
 	sb.WriteString("## Response to Peer\n")
 	sb.WriteString("<Address their key points>\n\n")
 	sb.WriteString("## Final Reasoning\n")
@@ -405,4 +411,26 @@ func extractJSONBlock(raw string) string {
 		return trimmed[start : end+1]
 	}
 	return trimmed
+}
+
+// buildIssueParserPrompt creates a prompt to parse individual issues from a review report.
+func buildIssueParserPrompt(reportText string) string {
+	var sb strings.Builder
+	sb.WriteString("Parse the following code review report and extract individual P0/P1 issues.\n\n")
+	sb.WriteString("Each issue should be a distinct bug, problem, or concern mentioned in the report.\n")
+	sb.WriteString("If the report contains multiple issues, separate them. If it's a single issue, return it as one item.\n")
+	sb.WriteString("Only extract P0 (Critical) and P1 (Major) issues. Ignore lower priority items.\n\n")
+	sb.WriteString("Review report:\n")
+	sb.WriteString(reportText)
+	sb.WriteString("\n\n")
+	sb.WriteString("Reply ONLY with JSON in this format:\n")
+	sb.WriteString("{\n")
+	sb.WriteString("  \"issues\": [\n")
+	sb.WriteString("    {\"text\": \"issue description\", \"priority\": \"P0\"},\n")
+	sb.WriteString("    {\"text\": \"another issue\", \"priority\": \"P1\"}\n")
+	sb.WriteString("  ]\n")
+	sb.WriteString("}\n")
+	sb.WriteString("\n")
+	sb.WriteString("If the report says \"No P0/P1 issues found\", return an empty issues array.\n")
+	return sb.String()
 }

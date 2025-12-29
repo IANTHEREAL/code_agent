@@ -167,17 +167,69 @@ func (r *Runner) Run() (*Result, error) {
 		return result, nil
 	}
 
-	issueText := reviewLog.Report
-
-	// Pass the reviewer's branch ID to start the verification chain
-	report, err := r.confirmIssue(issueText, reviewLog.BranchID, analysisPath)
+	// Parse and split issues from the review report
+	issues, err := r.parseIssuesFromReport(reviewLog.Report)
 	if err != nil {
-		return nil, err
+		logx.Warningf("Failed to parse issues from report, treating as single issue: %v", err)
+		issues = []string{reviewLog.Report}
 	}
-	result.Issues = append(result.Issues, report)
+
+	if len(issues) == 0 {
+		result.Status = statusClean
+		result.Summary = "Clean PR: Not found any blocking P0/P1 issues."
+		r.attachBranchRange(result)
+		return result, nil
+	}
+
+	numIssues := len(issues)
+	logx.Infof("Parsed %d issues from review report, verifying each in parallel", numIssues)
+
+	// Verify each issue in parallel
+	var (
+		verificationErrors []string
+		mu                 sync.Mutex
+		wg                 sync.WaitGroup
+	)
+
+	for i, issueText := range issues {
+		wg.Add(1)
+		go func(issueIdx int, text string) {
+			defer wg.Done()
+			logx.Infof("Verifying issue %d/%d", issueIdx+1, numIssues)
+			report, err := r.confirmIssue(text, reviewLog.BranchID, analysisPath)
+			if err != nil {
+				errMsg := fmt.Sprintf("Issue %d/%d verification failed: %v", issueIdx+1, numIssues, err)
+				logx.Errorf(errMsg)
+				mu.Lock()
+				verificationErrors = append(verificationErrors, errMsg)
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			result.Issues = append(result.Issues, report)
+			mu.Unlock()
+		}(i, issueText)
+	}
+
+	// Wait for all verifications to complete
+	wg.Wait()
+
+	if len(result.Issues) == 0 {
+		// All verifications failed or no valid issues found
+		if len(verificationErrors) > 0 {
+			// If we had verification errors, log them but still return clean
+			// (since we couldn't confirm any issues)
+			logx.Warningf("All %d issue verifications failed. Errors: %v", len(issues), verificationErrors)
+		}
+		result.Status = statusClean
+		result.Summary = "Clean PR: Not found any blocking P0/P1 issues."
+		r.attachBranchRange(result)
+		return result, nil
+	}
+
 	confirmed, unresolved := summarizeIssueCounts(result.Issues)
 	result.Status = statusIssues
-	result.Summary = fmt.Sprintf("Identified %d P0/P1 issue (%d confirmed, %d unresolved).", len(result.Issues), confirmed, unresolved)
+	result.Summary = fmt.Sprintf("Identified %d P0/P1 issues (%d confirmed, %d unresolved).", len(result.Issues), confirmed, unresolved)
 	r.attachBranchRange(result)
 	return result, nil
 }
@@ -512,13 +564,16 @@ func (r *Runner) hasRealIssue(reportText string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if resp == nil || len(resp.Choices) == 0 {
+		return false, fmt.Errorf("LLM response is empty or has no choices")
+	}
 	type issueCheck struct {
 		HasIssue bool `json:"has_issue"`
 	}
 	jsonBlock := extractJSONBlock(resp.Choices[0].Message.Content)
 	var check issueCheck
 	if err := json.Unmarshal([]byte(jsonBlock), &check); err != nil {
-		return false, err
+		return false, fmt.Errorf("failed to parse has_issue JSON: %w", err)
 	}
 	return check.HasIssue, nil
 }
@@ -669,4 +724,66 @@ func summarizeIssueCounts(reports []IssueReport) (confirmed, unresolved int) {
 		}
 	}
 	return
+}
+
+// parseIssuesFromReport parses the review report to extract individual issues.
+// It uses LLM to identify and separate distinct P0/P1 issues from the report text.
+func (r *Runner) parseIssuesFromReport(reportText string) ([]string, error) {
+	// Use LLM to parse issues from the report
+	prompt := buildIssueParserPrompt(reportText)
+	resp, err := r.brain.Complete([]b.ChatMessage{
+		{Role: "system", Content: "Parse code review reports and extract individual P0/P1 issues. Reply only with JSON."},
+		{Role: "user", Content: prompt},
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp == nil || len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("LLM response is empty or has no choices")
+	}
+
+	type issueList struct {
+		Issues []struct {
+			Text     string `json:"text"`
+			Priority string `json:"priority"` // P0, P1, etc.
+		} `json:"issues"`
+	}
+
+	jsonBlock := extractJSONBlock(resp.Choices[0].Message.Content)
+	var list issueList
+	if err := json.Unmarshal([]byte(jsonBlock), &list); err != nil {
+		// Fallback: treat entire report as single issue
+		logx.Warningf("Failed to parse JSON from LLM response, treating entire report as single issue: %v", err)
+		return []string{reportText}, nil
+	}
+
+	// If LLM explicitly returned empty array (e.g., "No P0/P1 issues found"), return empty
+	// Note: This should be rare since hasRealIssue already filtered these out
+	if len(list.Issues) == 0 {
+		// Check if report explicitly says no issues
+		lowerReport := strings.ToLower(reportText)
+		if strings.Contains(lowerReport, "no p0/p1 issues found") ||
+			strings.Contains(lowerReport, "no p0/p1 issue") {
+			return []string{}, nil
+		}
+		// Otherwise, fallback to treating entire report as single issue
+		logx.Warningf("LLM returned empty issues array, treating entire report as single issue")
+		return []string{reportText}, nil
+	}
+
+	issues := make([]string, 0, len(list.Issues))
+	for _, issue := range list.Issues {
+		if strings.TrimSpace(issue.Text) != "" {
+			issues = append(issues, strings.TrimSpace(issue.Text))
+		}
+	}
+
+	if len(issues) == 0 {
+		// All issues had empty text, fallback to entire report
+		logx.Warningf("All parsed issues had empty text, treating entire report as single issue")
+		return []string{reportText}, nil
+	}
+
+	return issues, nil
 }
