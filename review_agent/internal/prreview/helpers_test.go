@@ -59,7 +59,6 @@ func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
 		"Severity:",
 		"VERDICT",
 		"Change Analysis at:",
-		p0p1VerdictGateBlock,
 		"cargo check --all-targets",
 		"cargo clippy --all-targets",
 	}

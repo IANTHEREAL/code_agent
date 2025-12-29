@@ -173,8 +173,6 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) is a real P0/P1 issue.\n")
 	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n")
 	sb.WriteString("- Use CONFIRMED only when you conclude the issue is truly P0/P1; otherwise REJECTED and label Severity as P2 or Not an issue.\n\n")
-	sb.WriteString(p0p1VerdictGateBlock)
-	sb.WriteString("\n\n")
 	sb.WriteString(outputAwarenessBlock)
 	sb.WriteString("\n\n")
 	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
