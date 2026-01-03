@@ -327,6 +327,53 @@ type verdictDecision struct {
 
 var verdictLineRe = regexp.MustCompile(`(?i)^\s*#?\s*verdict\s*:\s*\[?\s*(confirmed|rejected)\s*\]?\s*$`)
 
+type verdictExtractionResponse struct {
+	Verdict    string `json:"verdict"`
+	Evidence   string `json:"evidence,omitempty"`
+	Confidence any    `json:"confidence,omitempty"`
+}
+
+func buildVerdictExtractionPrompt(transcript Transcript) string {
+	var sb strings.Builder
+	sb.WriteString("You are extracting a final verdict from a verification transcript.\n")
+	sb.WriteString("Do NOT re-evaluate the underlying issue; ONLY extract what verdict the transcript's author intended.\n")
+	sb.WriteString("The verdict line may be wrapped in markdown (bullets, backticks, headings).\n\n")
+	sb.WriteString("Return ONLY JSON with this schema:\n")
+	sb.WriteString("{\"verdict\":\"confirmed|rejected|unknown\",\"evidence\":\"<copy the line(s) that support your decision>\"}\n")
+	sb.WriteString("Use verdict=unknown ONLY if you cannot confidently determine the intended final verdict.\n")
+	sb.WriteString("If multiple verdicts appear, prefer the final one.\n\n")
+	sb.WriteString("Transcript metadata:\n")
+	sb.WriteString(fmt.Sprintf("- agent: %s\n", strings.TrimSpace(transcript.Agent)))
+	sb.WriteString(fmt.Sprintf("- round: %d\n\n", transcript.Round))
+	sb.WriteString("Transcript:\n<<<TRANSCRIPT>>>\n")
+	sb.WriteString(transcript.Text)
+	sb.WriteString("\n<<<END TRANSCRIPT>>>\n")
+	return sb.String()
+}
+
+func parseVerdictExtractionResponse(raw string) (verdictDecision, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return verdictDecision{}, fmt.Errorf("empty verdict response (raw=%q)", truncateForError(raw))
+	}
+	jsonBlock := extractJSONBlock(trimmed)
+	var out verdictExtractionResponse
+	if err := json.Unmarshal([]byte(jsonBlock), &out); err != nil {
+		return verdictDecision{}, fmt.Errorf("invalid verdict JSON: %v (json=%q raw=%q)", err, truncateForError(jsonBlock), truncateForError(trimmed))
+	}
+	verdict := strings.ToLower(strings.TrimSpace(out.Verdict))
+	switch verdict {
+	case "confirmed", "rejected", "unknown":
+		reason := "llm transcript verdict"
+		if ev := strings.TrimSpace(out.Evidence); ev != "" {
+			reason = fmt.Sprintf("llm transcript verdict (evidence: %s)", truncateForError(ev))
+		}
+		return verdictDecision{Verdict: verdict, Reason: reason}, nil
+	default:
+		return verdictDecision{}, fmt.Errorf("invalid verdict value %q (raw=%q)", out.Verdict, truncateForError(trimmed))
+	}
+}
+
 func extractTranscriptVerdict(transcript string) (verdictDecision, bool) {
 	lines := strings.Split(transcript, "\n")
 	limit := 10

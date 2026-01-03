@@ -86,6 +86,8 @@ type Runner struct {
 	alignmentOverride func(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error)
 	// hasRealIssueOverride is a test hook to avoid network calls in Run().
 	hasRealIssueOverride func(reportText string) (bool, error)
+	// verdictOverride is a test hook to avoid network calls in determineVerdict().
+	verdictOverride func(transcript Transcript) (verdictDecision, error)
 }
 
 // NewRunner validates options and constructs a workflow runner.
@@ -275,9 +277,12 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string, changeAnal
 		if reviewerVerdict.Verdict == "confirmed" {
 			report.Status = commentConfirmed
 			report.VerdictExplanation = "SkipTester enabled: Reviewer confirmed the issue."
-		} else {
+		} else if reviewerVerdict.Verdict == "rejected" {
 			report.Status = commentUnresolved
 			report.VerdictExplanation = "SkipTester enabled: Reviewer rejected the issue."
+		} else {
+			report.Status = commentUnresolved
+			report.VerdictExplanation = fmt.Sprintf("SkipTester enabled: Reviewer verdict undetermined (%s).", strings.TrimSpace(reviewerVerdict.Reason))
 		}
 		return report, nil
 	}
@@ -530,11 +535,39 @@ func (r *Runner) determineVerdict(transcript Transcript) (verdictDecision, error
 		return decision, nil
 	}
 
-	// No LLM fallback: missing explicit marker => reject (conservative).
-	return verdictDecision{
-		Verdict: "rejected",
-		Reason:  "missing explicit transcript verdict marker",
-	}, nil
+	// 2. Fallback: use LLM to infer the intended verdict from the transcript text.
+	// This is more robust to markdown formatting (e.g. bullet lists, inline code) that can hide the marker.
+	if r.verdictOverride != nil {
+		decision, err := r.verdictOverride(transcript)
+		if err == nil {
+			decision.Verdict = strings.ToLower(strings.TrimSpace(decision.Verdict))
+			return decision, nil
+		}
+		logx.Warningf("Verdict override failed for %s (Round %d): %v", transcript.Agent, transcript.Round, err)
+	}
+	if r.brain == nil {
+		return verdictDecision{Verdict: "unknown", Reason: "verdict marker missing and LLM brain unavailable"}, nil
+	}
+	prompt := buildVerdictExtractionPrompt(transcript)
+	resp, err := r.brain.Complete([]b.ChatMessage{
+		{Role: "system", Content: "Extract the transcript's final verdict. Reply ONLY with JSON."},
+		{Role: "user", Content: prompt},
+	}, nil)
+	if err != nil {
+		logx.Warningf("LLM verdict extraction failed for %s (Round %d): %v", transcript.Agent, transcript.Round, err)
+		return verdictDecision{Verdict: "unknown", Reason: fmt.Sprintf("llm verdict extraction failed: %v", err)}, nil
+	}
+	content := ""
+	if resp != nil && len(resp.Choices) > 0 {
+		content = resp.Choices[0].Message.Content
+	}
+	decision, parseErr := parseVerdictExtractionResponse(content)
+	if parseErr != nil {
+		logx.Warningf("LLM verdict parse failed for %s (Round %d): %v. Raw=%q", transcript.Agent, transcript.Round, parseErr, truncateForError(content))
+		return verdictDecision{Verdict: "unknown", Reason: fmt.Sprintf("llm verdict parse failed: %v", parseErr)}, nil
+	}
+	logx.Infof("Parsed LLM verdict for %s (Round %d): %s", transcript.Agent, transcript.Round, decision.Verdict)
+	return decision, nil
 }
 
 func (r *Runner) checkAlignment(issueText string, alpha Transcript, beta Transcript) (alignmentVerdict, error) {
