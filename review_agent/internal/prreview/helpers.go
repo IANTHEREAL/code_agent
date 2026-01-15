@@ -141,9 +141,6 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("Verification Role: REVIEWER\n\n")
 	sb.WriteString(universalStudyLine)
 	sb.WriteString("\n\n")
-	sb.WriteString("Task / PR context:\n")
-	sb.WriteString(task)
-	sb.WriteString("\n\n")
 	if strings.TrimSpace(changeAnalysisPath) != "" {
 		sb.WriteString("Reference (read-only): Change Analysis at: ")
 		sb.WriteString(changeAnalysisPath)
