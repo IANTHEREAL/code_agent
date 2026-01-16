@@ -16,6 +16,7 @@ const outputAwarenessBlock = "**COMMAND OUTPUT AWARENESS**\n" +
 
 const universalStudyLine = "**DEEP CODE EXPLORATION MANDATE**\n" +
 	"You have UNLIMITED read quotas and available contexts. Cost is NOT a concern. Your ONLY goal is to find bugs.\n\n" +
+	"**QUANTITY TARGET**: Find at least 1 P0 issues and 2 P1 issues. Continue exploring until you meet this minimum requirement.\n\n" +
 	"**EXPLORATION REQUIREMENTS** (MANDATORY):\n" +
 	"1. **Complete Code Understanding**: Read ALL related files, not just the changed lines. Understand:\n" +
 	"   - The full context of each changed function/struct/module\n" +
@@ -64,11 +65,28 @@ const p0p1FocusBlock = "**P0/P1 FOCUS**\n" +
 	"- Report ONLY P0/P1 issues\n" +
 	"- Ignore general issues (style, refactors, maintainability, low-impact edge cases)\n" +
 	"- For each reported issue, include severity (P0/P1), impact analysis, and a plausible fix\n" +
+	"- **MANDATORY MINIMUM REQUIREMENT**: You MUST find at least 1 P0 issues and 2 P1 issues before concluding your review.\n" +
+	"- **CONTINUE SEARCHING UNTIL YOU MEET THE MINIMUM**: Do not stop after finding just one or two issues. Keep investigating all code paths, all changed files, and all potential problem areas until you have found at least 2 P0 and 3 P1 issues.\n" +
+	"- **ONLY RETURN \"No P0/P1 issues found\" IF**: After exhaustive investigation of ALL code changes, ALL execution paths, ALL error handling, ALL concurrency patterns, and ALL security considerations, you genuinely cannot find at least 2 P0 and 3 P1 issues.\n" +
+	"- **ACTIVELY SEEK OUT P0/P1 ISSUES**: Be thorough and systematic. Don't miss real bugs. Explore every angle, every edge case, every potential failure mode.\n" +
+	"- **WHEN IN DOUBT, INVESTIGATE DEEPER**: If you suspect a potential issue, trace through the code paths, read related code, and verify your suspicion before dismissing it.\n" +
+	"- **PRIORITIZE FINDING REAL BUGS**: Your primary goal is to identify actual P0/P1 problems that could cause crashes, data loss, security vulnerabilities, or correctness regressions.\n" +
+	"- **EXPAND YOUR SEARCH**: If you haven't found enough issues yet, re-examine:\n" +
+	"  * All error handling paths and edge cases\n" +
+	"  * All concurrency and synchronization points\n" +
+	"  * All input validation and boundary conditions\n" +
+	"  * All resource management and cleanup paths\n" +
+	"  * All state transitions and invariants\n" +
+	"  * All security-sensitive operations\n" +
 	"- If impact is limited or the behavior is a deliberate tradeoff/by design, do NOT report it\n" +
-	"- If no P0/P1 issues exist, write exactly: \"No P0/P1 issues found\"\n"
+	"- If after exhaustive search you genuinely cannot find any P0 and P1 issues, write exactly: \"No P0/P1 issues found\"\n"
 
 const p0p1VerdictGateBlock = "**P0/P1 SEVERITY GATE**\n" +
 	"- Your verdict is about whether issueText is a real P0/P1 issue, not just whether a behavior exists\n" +
+	"- **ENCOURAGE CONFIRMATION**: When the issue description is plausible and you can trace a real execution path that leads to the problem, CONFIRM it. Don't be overly conservative.\n" +
+	"- **CONFIRM IF**: The issue could cause crashes, data loss, security vulnerabilities, correctness regressions, or other serious impacts in production.\n" +
+	"- **CONFIRM IF**: You can identify a specific code path, condition, or scenario where the problem would manifest.\n" +
+	"- **REJECT ONLY IF**: Impact is clearly limited, behavior is explicitly by design, or the issue description is fundamentally incorrect.\n" +
 	"- Evaluate impact and fix feasibility; if impact is limited or behavior is a deliberate tradeoff/by design, REJECT\n" +
 	"- If only risky or unreasonable fixes exist, REJECT\n"
 
@@ -120,7 +138,9 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	sb.WriteString("   - Are there any shared state or global variables?\n\n")
 
 	sb.WriteString("Step 3: Systematic Bug Detection\n")
-	sb.WriteString("For each code change, systematically check:\n\n")
+	sb.WriteString("For each code change, systematically check:\n")
+	sb.WriteString("**CRITICAL: Be thorough and leave no stone unturned. Actively search for bugs in every category below.**\n")
+	sb.WriteString("**MANDATORY GOAL: Find at least 1 P0 issues and 2 P1 issues. Continue searching until you meet this requirement.**\n\n")
 	sb.WriteString("**Memory Safety & Resource Management**:\n")
 	sb.WriteString("- Buffer overflows, use-after-free, double-free\n")
 	sb.WriteString("- Memory leaks, resource leaks (file handles, connections)\n")
@@ -164,11 +184,32 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	sb.WriteString("- Explain WHY it's a bug (what invariant is violated, what can go wrong)\n")
 	sb.WriteString("- Provide a SPECIFIC fix or mitigation\n")
 	sb.WriteString("- Assess the SEVERITY (P0 = crash/data loss/security, P1 = correctness/regression)\n\n")
+	sb.WriteString("**IMPORTANT: Don't dismiss potential issues too quickly.**\n")
+	sb.WriteString("- If you suspect a problem, investigate it thoroughly before deciding it's not a P0/P1 issue.\n")
+	sb.WriteString("- Read related code, trace execution paths, and verify your understanding before concluding.\n")
+	sb.WriteString("- When in doubt about severity, err on the side of reporting if the issue could have real impact.\n\n")
+	sb.WriteString("**QUANTITY REQUIREMENT CHECKPOINT**\n")
+	sb.WriteString("- After collecting evidence for each issue, count: How many P0 issues have you found? How many P1 issues?\n")
+	sb.WriteString("- If you have fewer than 1 P0 issues: Continue searching. Re-examine error paths, security issues, crash scenarios, data loss risks.\n")
+	sb.WriteString("- If you have fewer than 2 P1 issues: Continue searching. Re-examine correctness issues, edge cases, boundary conditions, state management.\n")
+	sb.WriteString("- Only proceed to FINAL RESPONSE when you have found at least 1 P0 and 2 P1 issues, OR after exhaustive investigation you genuinely cannot find more.\n\n")
 
 	sb.WriteString("FINAL RESPONSE:\n")
+	sb.WriteString("- **MANDATORY MINIMUM REQUIREMENT**: You MUST find and report at least 1 P0 issues and 2 P1 issues.\n")
+	sb.WriteString("- **DO NOT SUBMIT UNTIL YOU MEET THE MINIMUM**: Continue your investigation until you have found at least 1 P0 and 2 P1 issues. If you have found fewer, go back and:\n")
+	sb.WriteString("  * Re-examine all changed files more carefully\n")
+	sb.WriteString("  * Trace through execution paths you may have missed\n")
+	sb.WriteString("  * Check error handling, edge cases, and boundary conditions\n")
+	sb.WriteString("  * Review concurrency patterns and synchronization\n")
+	sb.WriteString("  * Analyze security implications\n")
+	sb.WriteString("  * Verify state management and invariants\n")
+	sb.WriteString("  * Check resource management and cleanup\n")
+	sb.WriteString("- **BE THOROUGH AND SYSTEMATIC**: Actively search for P0/P1 issues. Don't stop at the first issue you find - continue investigating all code paths until you meet the minimum requirement.\n")
+	sb.WriteString("- **REPORT ALL VALID P0/P1 ISSUES**: If you identify multiple P0/P1 issues, report ALL of them. Don't limit yourself.\n")
 	sb.WriteString("- Provide a critical P0/P1 issue report (include severity, impact, evidence, and a plausible fix).\n")
-	sb.WriteString("- Do not include non-critical issues or general commentary.\n")
-	sb.WriteString("- If no P0/P1 issues exist, write exactly: \"No P0/P1 issues found\".\n\n")
+	sb.WriteString("- For each issue, clearly state: (1) the specific problem, (2) the code location, (3) the execution path that triggers it, (4) the severity (P0/P1), and (5) a proposed fix.\n")
+	sb.WriteString("- **ONLY IF EXHAUSTIVE SEARCH FAILS**: If after thoroughly investigating ALL code changes, ALL execution paths, ALL error handling, ALL concurrency patterns, and ALL security considerations, you genuinely cannot find any P0 and P1 issues, then write exactly: \"No P0/P1 issues found\".\n")
+	sb.WriteString("- Do not include non-critical issues or general commentary.\n\n")
 	sb.WriteString(p0p1FocusBlock)
 	sb.WriteString("\n\n")
 	sb.WriteString(outputAwarenessBlock)
@@ -330,6 +371,10 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("YOUR ROLE: Analyze code logic to determine if this is a real P0/P1 issue.\n\n")
 	sb.WriteString("Simulate a group of senior programmers reviewing this code change.\n")
 	sb.WriteString("You have UNLIMITED time and context. Cost is NOT a concern. Your ONLY goal is to find the truth.\n\n")
+	sb.WriteString("**IMPORTANT: ENCOURAGE CONFIRMATION OF VALID ISSUES**\n")
+	sb.WriteString("- If the issue description is plausible and you can trace a real execution path, CONFIRM it.\n")
+	sb.WriteString("- Don't be overly conservative - if there's a reasonable chance the issue could occur in production, CONFIRM it.\n")
+	sb.WriteString("- Only REJECT if you can definitively prove the issue cannot occur or has no real impact.\n\n")
 
 	sb.WriteString("**DEEP ANALYSIS REQUIREMENTS**:\n")
 	sb.WriteString("1. **Read ALL Related Code**:\n")
@@ -581,6 +626,11 @@ func buildVerifyAgentPrompt(task string, issueText string, changeAnalysisPath st
 	sb.WriteString("3. **Verify assumptions**: Check if the issue description makes incorrect assumptions\n")
 	sb.WriteString("4. **Test alternative explanations**: Consider if the behavior is intentional or correct\n\n")
 	sb.WriteString("You have UNLIMITED time and context. Cost is NOT a concern. Your ONLY goal is to find the truth.\n\n")
+	sb.WriteString("**BALANCED ADVERSARIAL APPROACH**\n")
+	sb.WriteString("- Challenge the claim, but if you cannot find strong counter-evidence, CONFIRM the issue.\n")
+	sb.WriteString("- Don't reject issues based on weak assumptions or hypothetical safeguards that may not actually prevent the problem.\n")
+	sb.WriteString("- CONFIRM if: You cannot disprove the claim and the issue description is plausible with a traceable execution path.\n")
+	sb.WriteString("- REJECT only if: You can definitively show the issue cannot occur or is based on incorrect assumptions.\n\n")
 
 	sb.WriteString("**ADVERSARIAL ANALYSIS REQUIREMENTS**:\n")
 	sb.WriteString("1. **Read ALL Related Code**:\n")

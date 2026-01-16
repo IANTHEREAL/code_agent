@@ -246,49 +246,21 @@ func (r *Runner) Run() (*Result, error) {
 	}
 
 	numIssues := len(issues)
-	logx.Infof("Parsed %d issues from review report, verifying each in parallel", numIssues)
+	logx.Infof("Parsed %d issues from review report", numIssues)
 
-	// Verify each issue in parallel
-	var (
-		verificationErrors []string
-		mu                 sync.Mutex
-		wg                 sync.WaitGroup
-	)
-
-	for i, issueText := range issues {
-		wg.Add(1)
-		go func(issueIdx int, text string) {
-			defer wg.Done()
-			logx.Infof("Verifying issue %d/%d", issueIdx+1, numIssues)
-			report, err := r.confirmIssue(text, reviewLog.BranchID, analysisPath)
-			if err != nil {
-				errMsg := fmt.Sprintf("Issue %d/%d verification failed: %v", issueIdx+1, numIssues, err)
-				logx.Errorf(errMsg)
-				mu.Lock()
-				verificationErrors = append(verificationErrors, errMsg)
-				mu.Unlock()
-				return
-			}
-			mu.Lock()
-			result.Issues = append(result.Issues, report)
-			mu.Unlock()
-		}(i, issueText)
+	// Convert issues to IssueReport without verification
+	for _, issueText := range issues {
+		result.Issues = append(result.Issues, IssueReport{
+			IssueText:              issueText,
+			Status:                 commentUnresolved, // Mark as unresolved since we skip verification
+			ReviewerRound1BranchID: reviewLog.BranchID,
+		})
 	}
 
-	// Wait for all verifications to complete
-	wg.Wait()
-
-	if len(result.Issues) == 0 {
-		// All verifications failed or no valid issues found
-		if len(verificationErrors) > 0 {
-			// If we had verification errors, log them but still return clean
-			// (since we couldn't confirm any issues)
-			logx.Warningf("All %d issue verifications failed. Errors: %v", len(issues), verificationErrors)
-		}
-		result.Status = statusClean
-		result.Summary = "Clean PR: Not found any blocking P0/P1 issues."
-		r.attachBranchRange(result)
-		return result, nil
+	// Limit to maximum 5 issues
+	if len(result.Issues) > 5 {
+		logx.Infof("Limiting issues from %d to 5", len(result.Issues))
+		result.Issues = result.Issues[:5]
 	}
 
 	confirmed, unresolved := summarizeIssueCounts(result.Issues)
@@ -1077,4 +1049,49 @@ func (r *Runner) parseIssuesFromReport(reportText string) ([]string, error) {
 	}
 
 	return issues, nil
+}
+
+// filterDuplicateVerifyBranches filters out issues that have verify branch IDs
+// that have already appeared in previous issues.
+func (r *Runner) filterDuplicateVerifyBranches(issues []IssueReport) []IssueReport {
+	seenBranchIDs := make(map[string]bool)
+	filtered := make([]IssueReport, 0, len(issues))
+
+	for _, issue := range issues {
+		// Collect all verify branch IDs for this issue
+		verifyBranchIDs := []string{}
+		if issue.VerifyAgentRound1BranchID != "" {
+			verifyBranchIDs = append(verifyBranchIDs, issue.VerifyAgentRound1BranchID)
+		}
+		if issue.VerifyAgentRound2BranchID != "" {
+			verifyBranchIDs = append(verifyBranchIDs, issue.VerifyAgentRound2BranchID)
+		}
+		if issue.VerifyAgentRound3BranchID != "" {
+			verifyBranchIDs = append(verifyBranchIDs, issue.VerifyAgentRound3BranchID)
+		}
+
+		// Check if any verify branch ID has been seen before
+		hasDuplicate := false
+		for _, branchID := range verifyBranchIDs {
+			if seenBranchIDs[branchID] {
+				hasDuplicate = true
+				logx.Infof("Filtering out issue with duplicate verify branch ID: %s", branchID)
+				break
+			}
+		}
+
+		// If no duplicates, add the issue and mark its branch IDs as seen
+		if !hasDuplicate {
+			filtered = append(filtered, issue)
+			for _, branchID := range verifyBranchIDs {
+				seenBranchIDs[branchID] = true
+			}
+		}
+	}
+
+	if len(filtered) < len(issues) {
+		logx.Infof("Filtered out %d issues with duplicate verify branch IDs", len(issues)-len(filtered))
+	}
+
+	return filtered
 }
