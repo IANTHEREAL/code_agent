@@ -113,24 +113,6 @@ func main() {
 		})
 	}
 
-	type outputIssue struct {
-		IssueText string `json:"issue_text"`
-	}
-
-	issues := make([]outputIssue, 0)
-	if result != nil {
-		issues = make([]outputIssue, 0, len(result.Issues))
-		for _, issue := range result.Issues {
-			issues = append(issues, outputIssue{IssueText: issue.IssueText})
-		}
-	}
-
-	out, _ := json.MarshalIndent(struct {
-		Task   string        `json:"task"`
-		Issues []outputIssue `json:"issues"`
-	}{
-		Task:   tsk,
-		Issues: issues,
-	}, "", "  ")
+	out, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Fprintln(os.Stderr, string(out))
 }

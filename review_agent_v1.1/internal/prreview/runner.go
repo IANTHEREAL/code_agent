@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -101,16 +100,16 @@ type Transcript struct {
 // IssueReport stores the consensus outcome for a single ISSUE block.
 type IssueReport struct {
 	IssueText                 string     `json:"issue_text"`
-	Status                    string     `json:"status"`
-	Alpha                     Transcript `json:"alpha"` // Reviewer transcript
-	Beta                      Transcript `json:"beta"`  // VerifyAgent transcript (adversarial review)
+	Status                    string     `json:"status,omitempty"`
+	Alpha                     Transcript `json:"alpha,omitempty"` // Reviewer transcript
+	Beta                      Transcript `json:"beta,omitempty"`  // VerifyAgent transcript (adversarial review)
 	ReviewerRound1BranchID    string     `json:"reviewer_round1_branch_id,omitempty"`
 	VerifyAgentRound1BranchID string     `json:"verify_agent_round1_branch_id,omitempty"`
 	ReviewerRound2BranchID    string     `json:"reviewer_round2_branch_id,omitempty"`
 	VerifyAgentRound2BranchID string     `json:"verify_agent_round2_branch_id,omitempty"`
 	ReviewerRound3BranchID    string     `json:"reviewer_round3_branch_id,omitempty"`
 	VerifyAgentRound3BranchID string     `json:"verify_agent_round3_branch_id,omitempty"`
-	ExchangeRounds            int        `json:"exchange_rounds"`
+	ExchangeRounds            int        `json:"exchange_rounds,omitempty"`
 	VerdictExplanation        string     `json:"verdict_explanation,omitempty"`
 	// Keep Tester fields for backward compatibility
 	TesterRound1BranchID string `json:"tester_round1_branch_id,omitempty"`
@@ -252,7 +251,7 @@ func (r *Runner) Run() (*Result, error) {
 	for _, issueText := range issues {
 		result.Issues = append(result.Issues, IssueReport{
 			IssueText:              issueText,
-			Status:                 commentUnresolved, // Mark as unresolved since we skip verification
+			Status:                 statusIssues, // Mark as unresolved since we skip verification
 			ReviewerRound1BranchID: reviewLog.BranchID,
 		})
 	}
@@ -263,9 +262,8 @@ func (r *Runner) Run() (*Result, error) {
 		result.Issues = result.Issues[:5]
 	}
 
-	confirmed, unresolved := summarizeIssueCounts(result.Issues)
 	result.Status = statusIssues
-	result.Summary = fmt.Sprintf("Identified %d P0/P1 issues (%d confirmed, %d unresolved).", len(result.Issues), confirmed, unresolved)
+	result.Summary = fmt.Sprintf("Identified %d P0/P1 issues.", len(result.Issues))
 	r.attachBranchRange(result)
 
 	// Finalize statistics
@@ -413,275 +411,6 @@ func (r *Runner) runSingleReview(parentBranchID string, changeAnalysisPath strin
 		BranchID: branchID,
 		Report:   reviewLog,
 	}, nil
-}
-
-func (r *Runner) confirmIssue(issueText string, startBranchID string, changeAnalysisPath string) (IssueReport, error) {
-	// New Flow: Reviewer + VerifyAgent with up to 3 rounds of consensus
-
-	type reviewerRun struct {
-		transcript Transcript
-		verdict    verdictDecision
-		err        error
-	}
-
-	type verifyAgentRun struct {
-		transcript Transcript
-		verdict    verdictDecision
-		err        error
-	}
-
-	// Helper to run reviewer role
-	runReviewerWithVerdict := func(round int, parent string, out *reviewerRun) {
-		stepName := fmt.Sprintf("reviewer_round%d", round)
-		r.recordStepStart(stepName)
-		startTime := time.Now()
-		defer func() {
-			r.recordStepEnd(stepName, time.Since(startTime))
-		}()
-
-		transcript, err := r.runRole("reviewer", issueText, changeAnalysisPath, parent)
-		if err != nil {
-			out.err = err
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Error: %v", err))
-			return
-		}
-		decision, err := r.determineVerdict(transcript)
-		if err != nil {
-			out.err = fmt.Errorf("reviewer verdict: %w", err)
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Verdict error: %v", err))
-			return
-		}
-		transcript.Verdict = decision.Verdict
-		transcript.VerdictReason = decision.Reason
-		out.transcript = transcript
-		out.verdict = decision
-	}
-
-	// Helper to run verify_agent (adversarial review)
-	runVerifyAgentWithResult := func(round int, parent string, reviewerOpinion string, out *verifyAgentRun) {
-		stepName := fmt.Sprintf("verify_agent_round%d", round)
-		r.recordStepStart(stepName)
-		startTime := time.Now()
-		defer func() {
-			r.recordStepEnd(stepName, time.Since(startTime))
-		}()
-
-		transcript, err := r.runVerifyAgentReview(issueText, changeAnalysisPath, parent, reviewerOpinion)
-		if err != nil {
-			out.err = err
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Error: %v", err))
-			return
-		}
-		decision, err := r.determineVerdict(transcript)
-		if err != nil {
-			out.err = fmt.Errorf("verify_agent verdict: %w", err)
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Verdict error: %v", err))
-			return
-		}
-		transcript.Verdict = decision.Verdict
-		transcript.VerdictReason = decision.Reason
-		out.transcript = transcript
-		out.verdict = decision
-	}
-
-	// Helper to run reviewer exchange
-	runReviewerExchange := func(round int, selfOpinion string, verifyAgentTranscript Transcript, parent string, out *reviewerRun) {
-		stepName := fmt.Sprintf("reviewer_round%d", round)
-		r.recordStepStart(stepName)
-		startTime := time.Now()
-		defer func() {
-			r.recordStepEnd(stepName, time.Since(startTime))
-		}()
-
-		// Build peer opinion from verify_agent transcript
-		peerOpinion := fmt.Sprintf("Verify Agent Verdict: %s\nReason: %s\nAnalysis: %s",
-			verifyAgentTranscript.Verdict, verifyAgentTranscript.VerdictReason, verifyAgentTranscript.Text)
-
-		transcript, err := r.runExchange("reviewer", issueText, changeAnalysisPath, selfOpinion, peerOpinion, parent)
-		if err != nil {
-			out.err = err
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Error: %v", err))
-			return
-		}
-		decision, err := r.determineVerdict(transcript)
-		if err != nil {
-			out.err = fmt.Errorf("reviewer round %d verdict: %w", round, err)
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Verdict error: %v", err))
-			return
-		}
-		transcript.Verdict = decision.Verdict
-		transcript.VerdictReason = decision.Reason
-		out.transcript = transcript
-		out.verdict = decision
-	}
-
-	// Helper to run verify_agent exchange
-	runVerifyAgentExchange := func(round int, selfTranscript Transcript, reviewerOpinion string, parent string, out *verifyAgentRun) {
-		stepName := fmt.Sprintf("verify_agent_round%d", round)
-		r.recordStepStart(stepName)
-		startTime := time.Now()
-		defer func() {
-			r.recordStepEnd(stepName, time.Since(startTime))
-		}()
-
-		// Build peer opinion from reviewer
-		peerOpinion := reviewerOpinion
-
-		transcript, err := r.runExchange("verify_agent", issueText, changeAnalysisPath, selfTranscript.Text, peerOpinion, parent)
-		if err != nil {
-			out.err = err
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Error: %v", err))
-			return
-		}
-		decision, err := r.determineVerdict(transcript)
-		if err != nil {
-			out.err = fmt.Errorf("verify_agent round %d verdict: %w", round, err)
-			r.recordAbnormalStep(stepName, fmt.Sprintf("Verdict error: %v", err))
-			return
-		}
-		transcript.Verdict = decision.Verdict
-		transcript.VerdictReason = decision.Reason
-		out.transcript = transcript
-		out.verdict = decision
-	}
-
-	// Check consistency between reviewer and verify_agent
-	checkConsistency := func(reviewerVerdict string, verifyVerdict string) bool {
-		// Consistent: both confirmed or both rejected
-		// Inconsistent: one confirmed and the other rejected
-		return reviewerVerdict == verifyVerdict
-	}
-
-	report := IssueReport{
-		IssueText:      issueText,
-		ExchangeRounds: 0,
-	}
-
-	// Round 1: Reviewer and VerifyAgent run in parallel
-	var reviewerR1 reviewerRun
-	var verifyAgentR1 verifyAgentRun
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		runReviewerWithVerdict(1, startBranchID, &reviewerR1)
-	}()
-	go func() {
-		defer wg.Done()
-		runVerifyAgentWithResult(1, startBranchID, "", &verifyAgentR1)
-	}()
-	wg.Wait()
-
-	if reviewerR1.err != nil {
-		return IssueReport{}, reviewerR1.err
-	}
-	if verifyAgentR1.err != nil {
-		// If verify_agent fails, mark as abnormal but continue with reviewer's result
-		logx.Warningf("verify_agent round 1 failed: %v. Continuing with reviewer result only.", verifyAgentR1.err)
-		report.Alpha = reviewerR1.transcript
-		report.ReviewerRound1BranchID = reviewerR1.transcript.BranchID
-		report.Status = commentUnresolved
-		report.VerdictExplanation = fmt.Sprintf("Round 1: Reviewer %s but verify_agent failed: %v",
-			reviewerR1.verdict.Verdict, verifyAgentR1.err)
-		return report, nil
-	}
-
-	// Validate branch IDs
-	if reviewerR1.transcript.BranchID == "" {
-		logx.Warningf("Reviewer round 1 did not return branch_id")
-	}
-	if verifyAgentR1.transcript.BranchID == "" {
-		logx.Warningf("VerifyAgent round 1 did not return branch_id")
-	}
-
-	report.Alpha = reviewerR1.transcript
-	report.Beta = verifyAgentR1.transcript
-	report.ReviewerRound1BranchID = reviewerR1.transcript.BranchID
-	report.VerifyAgentRound1BranchID = verifyAgentR1.transcript.BranchID
-
-	// Check Round 1 consistency
-	if checkConsistency(reviewerR1.verdict.Verdict, verifyAgentR1.verdict.Verdict) {
-		report.Status = commentConfirmed
-		report.VerdictExplanation = fmt.Sprintf("Round 1: Reviewer %s and VerifyAgent %s - consistent",
-			reviewerR1.verdict.Verdict, verifyAgentR1.verdict.Verdict)
-		return report, nil
-	}
-
-	// Not consistent, proceed to Round 2
-	report.ExchangeRounds = 1
-
-	// Round 2: Exchange opinions
-	var reviewerR2 reviewerRun
-	var verifyAgentR2 verifyAgentRun
-
-	// Reviewer sees VerifyAgent's result
-	runReviewerExchange(2, reviewerR1.transcript.Text, verifyAgentR1.transcript, reviewerR1.transcript.BranchID, &reviewerR2)
-	if reviewerR2.err != nil {
-		return IssueReport{}, reviewerR2.err
-	}
-
-	// VerifyAgent sees Reviewer's R2 opinion
-	runVerifyAgentExchange(2, verifyAgentR1.transcript, reviewerR2.transcript.Text, verifyAgentR1.transcript.BranchID, &verifyAgentR2)
-	if verifyAgentR2.err != nil {
-		logx.Warningf("verify_agent round 2 failed: %v. Using round 1 result.", verifyAgentR2.err)
-		// Use round 1 result if round 2 fails
-		verifyAgentR2.transcript = verifyAgentR1.transcript
-		verifyAgentR2.verdict = verifyAgentR1.verdict
-	}
-
-	report.Alpha = reviewerR2.transcript
-	report.Beta = verifyAgentR2.transcript
-	report.ReviewerRound2BranchID = reviewerR2.transcript.BranchID
-	report.VerifyAgentRound2BranchID = verifyAgentR2.transcript.BranchID
-
-	// Check Round 2 consistency
-	if checkConsistency(reviewerR2.verdict.Verdict, verifyAgentR2.verdict.Verdict) {
-		report.Status = commentConfirmed
-		report.VerdictExplanation = fmt.Sprintf("Round 2: Reviewer %s and VerifyAgent %s - consistent",
-			reviewerR2.verdict.Verdict, verifyAgentR2.verdict.Verdict)
-		return report, nil
-	}
-
-	// Still not consistent, proceed to Round 3 (max 3 rounds)
-	report.ExchangeRounds = 2
-
-	var reviewerR3 reviewerRun
-	var verifyAgentR3 verifyAgentRun
-
-	// Reviewer sees VerifyAgent's R2 result
-	runReviewerExchange(3, reviewerR2.transcript.Text, verifyAgentR2.transcript, reviewerR2.transcript.BranchID, &reviewerR3)
-	if reviewerR3.err != nil {
-		return IssueReport{}, reviewerR3.err
-	}
-
-	// VerifyAgent sees Reviewer's R3 opinion
-	runVerifyAgentExchange(3, verifyAgentR2.transcript, reviewerR3.transcript.Text, verifyAgentR2.transcript.BranchID, &verifyAgentR3)
-	if verifyAgentR3.err != nil {
-		logx.Warningf("verify_agent round 3 failed: %v. Using round 2 result.", verifyAgentR3.err)
-		// Use round 2 result if round 3 fails
-		verifyAgentR3.transcript = verifyAgentR2.transcript
-		verifyAgentR3.verdict = verifyAgentR2.verdict
-	}
-
-	report.Alpha = reviewerR3.transcript
-	report.Beta = verifyAgentR3.transcript
-	report.ReviewerRound3BranchID = reviewerR3.transcript.BranchID
-	report.VerifyAgentRound3BranchID = verifyAgentR3.transcript.BranchID
-
-	// Check Round 3 consistency
-	if checkConsistency(reviewerR3.verdict.Verdict, verifyAgentR3.verdict.Verdict) {
-		report.Status = commentConfirmed
-		report.VerdictExplanation = fmt.Sprintf("Round 3: Reviewer %s and VerifyAgent %s - consistent",
-			reviewerR3.verdict.Verdict, verifyAgentR3.verdict.Verdict)
-		return report, nil
-	}
-
-	// After 3 rounds, still not consistent
-	report.Status = commentUnresolved
-	report.VerdictExplanation = fmt.Sprintf("After 3 rounds: Reviewer %s and VerifyAgent %s - still inconsistent (存疑不报)",
-		reviewerR3.verdict.Verdict, verifyAgentR3.verdict.Verdict)
-
-	return report, nil
 }
 
 // runVerifyAgentReview runs an adversarial review using the same review mechanism
