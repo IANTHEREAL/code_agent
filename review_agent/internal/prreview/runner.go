@@ -395,7 +395,7 @@ func (r *Runner) confirmIssue(issueText string, startBranchID string, changeAnal
 func (r *Runner) runRole(role string, issueText string, changeAnalysisPath string, parentBranchID string) (Transcript, error) {
 	var prompt string
 	if role == "reviewer" {
-		prompt = buildLogicAnalystPrompt(r.opts.Task, issueText, changeAnalysisPath)
+		prompt = buildLogicAnalystPrompt(issueText)
 	} else {
 		prompt = buildTesterPrompt(r.opts.Task, issueText, changeAnalysisPath)
 	}

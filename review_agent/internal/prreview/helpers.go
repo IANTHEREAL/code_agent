@@ -46,31 +46,9 @@ func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 		sb.WriteString(changeAnalysisPath)
 		sb.WriteString("\n\n")
 	}
-	sb.WriteString("Review the code changes against the base branch 'BASE_BRANCH' (mentioned by task or extracted from PR using `gh`).\n\n")
-	sb.WriteString("  1) Find the merge-base SHA for this comparison:\n")
-	sb.WriteString("     - Try: git merge-base HEAD BASE_BRANCH\n")
-	sb.WriteString("     - If that fails, try: git merge-base HEAD \"BASE_BRANCH@{upstream}\"\n")
-	sb.WriteString("     - If still failing, inspect refs/remotes and pick the correct remote-tracking ref, then re-run merge-base.\n\n")
-	sb.WriteString("  2) Once you have MERGE_BASE_SHA, inspect the changes relative to the base branch:\n")
-	sb.WriteString("     - Run: git diff MERGE_BASE_SHA\n")
-	sb.WriteString("     - Also run: git diff --name-status MERGE_BASE_SHA\n\n")
-	sb.WriteString("Analyze the code changes and identify critical P0/P1 issues only.\n")
-	sb.WriteString("Focus on correctness, security, data loss, and release-blocking regressions introduced by this change.\n\n")
 	sb.WriteString("FINAL RESPONSE:\n")
-	sb.WriteString("- Provide a critical P0/P1 issue report (include severity, impact, evidence, and a plausible fix).\n")
-	sb.WriteString("- Do not include non-critical issues or general commentary.\n")
-	sb.WriteString("- If no P0/P1 issues exist, write exactly: \"No P0/P1 issues found\".\n\n")
-	sb.WriteString(p0p1FocusBlock)
-	sb.WriteString("\n\n")
-	sb.WriteString(outputAwarenessBlock)
-	sb.WriteString("\n\n")
-	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
-	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
-	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
-	sb.WriteString("- You MAY run EXTREMELY SMALL, targeted tests if absolutely necessary to verify a specific issue\n")
-	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
-	sb.WriteString("- Keep any commands narrowly targeted to the specific file or function being reviewed.\n\n")
-
+	sb.WriteString("- Provide a critical P0/P1/P2 issue report (include severity, impact, evidence, and a plausible fix).\n")
+	sb.WriteString("- If no P0/P1/P2 issues exist, write exactly: \"No P0/P1 issues found\".\n\n")
 	return sb.String()
 }
 
@@ -136,16 +114,8 @@ func buildHasRealIssuePrompt(reportText string) string {
 }
 
 // buildReviewerPrompt creates the prompt for the Reviewer role (logic analysis).
-func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath string) string {
+func buildLogicAnalystPrompt(issueText string) string {
 	var sb strings.Builder
-	sb.WriteString("Verification Role: REVIEWER\n\n")
-	sb.WriteString(universalStudyLine)
-	sb.WriteString("\n\n")
-	if strings.TrimSpace(changeAnalysisPath) != "" {
-		sb.WriteString("Reference (read-only): Change Analysis at: ")
-		sb.WriteString(changeAnalysisPath)
-		sb.WriteString("\n\n")
-	}
 	sb.WriteString("You will review an opponent's Issue List. Your default stance is: each issue may be a misread, a misunderstanding, or an edge case--unless the code evidence forces you to accept it.\n\n")
 	sb.WriteString("Reference severity definitions (guidance, not a hard rule):\n")
 	sb.WriteString("- P0 (Critical/Blocker): Reachable under default production configuration, and causes production unavailability; severe data loss/corruption; a security vulnerability; or a primary workflow is completely blocked with no practical workaround. Must be fixed immediately.\n")
@@ -166,21 +136,6 @@ func buildLogicAnalystPrompt(task string, issueText string, changeAnalysisPath s
 	sb.WriteString("Output requirements:\n")
 	sb.WriteString("For each issue, give a clear verdict: P0 / P1 / P2 / Not an issue, and include the most critical supporting evidence (file path + key symbols/logic). Provide a one-sentence justification for why it does or does not deserve P0/P1 in real scenarios.\n\n")
 	sb.WriteString("Optional strengthening (still not rigid): Any P0/P1 claim should be backed by a minimal trigger condition or a clear, code-grounded reasoning chain.\n")
-	sb.WriteString("\n\n")
-	sb.WriteString("SCOPE RULES (IMPORTANT):\n")
-	sb.WriteString("- Your # VERDICT must ONLY judge whether the Issue under review (issueText) is a real P0/P1 issue.\n")
-	sb.WriteString("- If you notice other problems, include them at the end under: \"## Additions (out of scope)\" and do NOT use them to justify or change your verdict.\n")
-	sb.WriteString("- Use CONFIRMED only when you conclude the issue is truly P0/P1; otherwise REJECTED and label Severity as P2 or Not an issue.\n\n")
-	sb.WriteString(outputAwarenessBlock)
-	sb.WriteString("\n\n")
-	sb.WriteString("**CRITICAL: TEST EXECUTION POLICY**\n")
-	sb.WriteString("- Do NOT run `cargo test` (this runs ALL tests and is extremely slow)\n")
-	sb.WriteString("- Do NOT run `cargo check --all-targets` or `cargo clippy --all-targets` (these are slow and often fail)\n")
-	sb.WriteString("- This role primarily uses code reading, logic analysis, and architectural understanding.\n")
-	sb.WriteString("- You MAY run EXTREMELY SMALL, targeted tests (0-2 tests max) ONLY if static analysis cannot determine the issue\n")
-	sb.WriteString("  * For Rust: Use `cargo test <specific_test_function_name>` to run ONLY one test\n")
-	sb.WriteString("  * Only run tests if they directly verify the specific issueText claim\n")
-	sb.WriteString("- Prefer static analysis. Only run tests when absolutely necessary for verification.\n\n")
 	sb.WriteString("RESPONSE FORMAT:\n")
 	sb.WriteString("Start with: # VERDICT: [CONFIRMED | REJECTED]\n")
 	sb.WriteString("Then: Severity: [P0 | P1 | P2 | Not an issue]\n\n")
