@@ -34,12 +34,21 @@ const p0p1VerdictGateBlock = "**P0/P1 SEVERITY GATE**\n" +
 	"- Evaluate impact and fix feasibility; if impact is limited or behavior is a deliberate tradeoff/by design, REJECT\n" +
 	"- If only risky or unreasonable fixes exist, REJECT\n"
 
+const bugFinderSOPBlock = "**SOP (use only when the matching pattern appears in code)**\n" +
+	"- Proxy flags are untrusted: when logic uses intent/maybe/temporary flags instead of final truth, ask \"can it be true early and later overturned?\" If yes, don't short-circuit critical logic on it.\n" +
+	"- Short-circuit checklist: when you see return/continue/skip, list intended outputs/state; identify what becomes missing/default/stale; check downstream handling (missing => worst-case/full processing?).\n" +
+	"- Strategy inputs are contracts: when selecting strategies/heuristics, treat candidate sets/cost inputs/pruning as externally visible; guards that coarsen/empty them are regression risk.\n" +
+	"- Non-local state time consistency: when reading/writing ctx/session/global, trace the read/write order; suspect irreversible decisions based on pre-write assumptions.\n" +
+	"- Minimal counterexample: for each guard, try a case where the guard triggers but later falls back / becomes irrelevant; if possible, treat it as a behavior-change point.\n"
+
 func buildIssueFinderPrompt(task string, changeAnalysisPath string) string {
 	var sb strings.Builder
 	sb.WriteString("Task: ")
 	sb.WriteString(task)
 	sb.WriteString("\n\n")
 	sb.WriteString(universalStudyLine)
+	sb.WriteString("\n\n")
+	sb.WriteString(bugFinderSOPBlock)
 	sb.WriteString("\n\n")
 	if strings.TrimSpace(changeAnalysisPath) != "" {
 		sb.WriteString("Reference (read-only): Change Analysis at: ")
@@ -113,9 +122,14 @@ func buildHasRealIssuePrompt(reportText string) string {
 	return sb.String()
 }
 
+func BuildLogicAnalystPrompt(issueText string) string {
+	return buildLogicAnalystPrompt(issueText)
+}
+
 // buildReviewerPrompt creates the prompt for the Reviewer role (logic analysis).
 func buildLogicAnalystPrompt(issueText string) string {
 	var sb strings.Builder
+	sb.WriteString("Verification Role: REVIEWER\n\n")
 	sb.WriteString("You will review an opponent's Issue List. Your default stance is: each issue may be a misread, a misunderstanding, or an edge case--unless the code evidence forces you to accept it.\n\n")
 	sb.WriteString("Reference severity definitions (guidance, not a hard rule):\n")
 	sb.WriteString("- P0 (Critical/Blocker): Reachable under default production configuration, and causes production unavailability; severe data loss/corruption; a security vulnerability; or a primary workflow is completely blocked with no practical workaround. Must be fixed immediately.\n")

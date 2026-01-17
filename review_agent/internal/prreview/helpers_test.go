@@ -12,17 +12,17 @@ func TestBuildIssueFinderPromptContainsInstructions(t *testing.T) {
 	required := []string{
 		"Task: " + task,
 		universalStudyLine,
-		"Change Analysis at:",
-		"Review the code changes against the base branch",
-		"git merge-base HEAD BASE_BRANCH",
-		"git diff MERGE_BASE_SHA",
-		"Analyze the code changes and identify critical P0/P1 issues only.",
+		"SOP (use only when the matching pattern appears in code)",
+		"Proxy flags are untrusted:",
+		"Short-circuit checklist:",
+		"Strategy inputs are contracts:",
+		"Non-local state time consistency:",
+		"Minimal counterexample:",
+		"Reference (read-only): Change Analysis at:",
+		"/workspace/change_analysis.md",
 		"FINAL RESPONSE:",
-		"critical P0/P1 issue report",
-		"Do not include non-critical issues or general commentary.",
-		"cargo check --all-targets",
-		"cargo clippy --all-targets",
-		p0p1FocusBlock,
+		"critical P0/P1/P2 issue report",
+		"\"No P0/P1 issues found\"",
 	}
 
 	for _, req := range required {
@@ -50,17 +50,17 @@ func TestBuildHasRealIssuePromptContainsContractAndSentinel(t *testing.T) {
 }
 
 func TestBuildReviewerPromptContainsRoleDirectives(t *testing.T) {
-	prompt := buildLogicAnalystPrompt("some task", "some issue", "/workspace/change_analysis.md")
+	issueText := "some issue"
+	prompt := buildLogicAnalystPrompt(issueText)
 	requiredPhrases := []string{
-		"REVIEWER",
-		universalStudyLine,
 		"opponent's Issue List",
 		"adversarial / rebuttal-style review",
+		"Evidence-first",
+		"RESPONSE FORMAT:",
+		"# VERDICT",
 		"Severity:",
-		"VERDICT",
-		"Change Analysis at:",
-		"cargo check --all-targets",
-		"cargo clippy --all-targets",
+		"The Issue List:",
+		issueText,
 	}
 	for _, phrase := range requiredPhrases {
 		if !strings.Contains(prompt, phrase) {
