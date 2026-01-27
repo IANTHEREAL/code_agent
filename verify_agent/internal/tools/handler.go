@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"verify_agent/internal/config"
-	"verify_agent/internal/logx"
 	"strings"
 	"sync"
 	"time"
+	"verify_agent/internal/config"
+	"verify_agent/internal/logx"
 )
 
 type ToolExecutionError struct {
@@ -372,7 +372,7 @@ func (h *ToolHandler) checkStatus(arguments map[string]any) (map[string]any, err
 		}
 
 		logx.Infof("Branch %s response (attempt %d): %s", branchID, attempt, toJSON(resp))
-		if hasNewSnapshot && (status == "succeed" || status == "failed" || status == "manifesting") {
+		if hasNewSnapshot && (status == "succeed" || status == "ready_for_manifest" || status == "finished" || status == "failed" || status == "manifesting") {
 			if status == "failed" {
 				details := map[string]any{"status": status}
 				if branchID := ExtractBranchID(resp); branchID != "" {

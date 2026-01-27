@@ -16,6 +16,7 @@ type fakeRunnerClient struct {
 	next             int
 	parallelCalls    []parallelCall
 	branchReadInputs []branchReadInput
+	reviewReport     string
 }
 
 type parallelCall struct {
@@ -59,8 +60,12 @@ func (c *fakeRunnerClient) BranchReadFile(branchID, filePath string) (map[string
 	c.mu.Unlock()
 
 	if strings.HasSuffix(filePath, "code_review.log") {
+		content := strings.TrimSpace(c.reviewReport)
+		if content == "" {
+			content = "No P0/P1 issues found"
+		}
 		return map[string]any{
-			"content": "No P0/P1 issues found",
+			"content": content,
 		}, nil
 	}
 	if strings.HasSuffix(filePath, changeAnalysisFilename) {
@@ -121,6 +126,48 @@ func TestRunSkipsScoutWhenFlagSet(t *testing.T) {
 	for _, input := range client.branchReadInputs {
 		if strings.HasSuffix(input.path, changeAnalysisFilename) {
 			t.Fatalf("expected no change analysis reads, saw %q", input.path)
+		}
+	}
+}
+
+func TestRunSkipsIssueConfirmationWhenFlagSet(t *testing.T) {
+	client := &fakeRunnerClient{reviewReport: "ISSUE: example"}
+	handler := tools.NewToolHandler(client, "proj", "parent", "/workspace")
+	runner, err := NewRunner(&b.LLMBrain{}, handler, nil, Options{
+		Task:             "task",
+		ProjectName:      "proj",
+		ParentBranchID:   "parent",
+		WorkspaceDir:     "/workspace",
+		SkipScout:        true,
+		SkipConfirmation: true,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner error: %v", err)
+	}
+	runner.hasRealIssueOverride = func(string) (bool, error) {
+		return true, nil
+	}
+
+	result, err := runner.Run()
+	if err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
+	if result.Status != statusIssues {
+		t.Fatalf("expected status %q, got %q", statusIssues, result.Status)
+	}
+	if len(result.Issues) != 1 {
+		t.Fatalf("expected 1 issue report, got %d", len(result.Issues))
+	}
+	if result.Issues[0].Status != commentUnresolved {
+		t.Fatalf("expected issue status %q, got %q", commentUnresolved, result.Issues[0].Status)
+	}
+
+	client.mu.Lock()
+	defer client.mu.Unlock()
+
+	for _, call := range client.parallelCalls {
+		if call.agent == "codex" || strings.Contains(call.prompt, "Role: SCOUT") {
+			t.Fatalf("expected no codex/scout calls when confirmation is skipped; saw agent=%q prompt=%q", call.agent, call.prompt)
 		}
 	}
 }

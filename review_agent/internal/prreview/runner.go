@@ -25,12 +25,13 @@ const (
 
 // Options configures the PR review workflow.
 type Options struct {
-	Task           string
-	ProjectName    string
-	ParentBranchID string
-	WorkspaceDir   string
-	SkipScout      bool
-	SkipTester     bool
+	Task             string
+	ProjectName      string
+	ParentBranchID   string
+	WorkspaceDir     string
+	SkipScout        bool
+	SkipTester       bool
+	SkipConfirmation bool
 }
 
 // Result captures the high-level outcome plus supporting artifacts.
@@ -170,6 +171,14 @@ func (r *Runner) Run() (*Result, error) {
 	}
 
 	issueText := reviewLog.Report
+
+	if r.opts.SkipConfirmation {
+		logx.Infof("Skipping issue confirmation stage by request.")
+		result.Status = statusIssues
+		result.Summary = fmt.Sprintf("Identified %d P0/P1 issue", len(result.Issues))
+		r.attachBranchRange(result)
+		return result, nil
+	}
 
 	// Pass the reviewer's branch ID to start the verification chain
 	report, err := r.confirmIssue(issueText, reviewLog.BranchID, analysisPath)

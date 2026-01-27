@@ -24,6 +24,7 @@ func main() {
 	streamJSON := flag.Bool("stream-json", false, "Emit workflow events as NDJSON (implies headless)")
 	skipScout := flag.Bool("skip-scout", true, "Skip the scout change analysis stage")
 	skipTester := flag.Bool("skip-tester", true, "Skip the tester and exchange verification stages")
+	skipConfirmation := flag.Bool("skip-confirmation", false, "Skip the issue confirmation stage")
 	flag.Parse()
 
 	streamEnabled := streamJSON != nil && *streamJSON
@@ -73,12 +74,13 @@ func main() {
 	}
 
 	opts := prreview.Options{
-		Task:           tsk,
-		ProjectName:    conf.ProjectName,
-		ParentBranchID: *parent,
-		WorkspaceDir:   conf.WorkspaceDir,
-		SkipScout:      *skipScout,
-		SkipTester:     *skipTester,
+		Task:             tsk,
+		ProjectName:      conf.ProjectName,
+		ParentBranchID:   *parent,
+		WorkspaceDir:     conf.WorkspaceDir,
+		SkipScout:        *skipScout,
+		SkipTester:       *skipTester,
+		SkipConfirmation: *skipConfirmation,
 	}
 	runner, err := prreview.NewRunner(brain, handler, streamer, opts)
 	if err != nil {
