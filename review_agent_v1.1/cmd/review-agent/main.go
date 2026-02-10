@@ -24,6 +24,7 @@ func main() {
 	streamJSON := flag.Bool("stream-json", false, "Emit workflow events as NDJSON (implies headless)")
 	skipScout := flag.Bool("skip-scout", true, "Skip the scout change analysis stage")
 	skipTester := flag.Bool("skip-tester", true, "Skip the tester and exchange verification stages")
+	explorationID := flag.String("exploration-id", "", "Optional exploration id for MCP headers")
 	flag.Parse()
 
 	streamEnabled := streamJSON != nil && *streamJSON
@@ -63,7 +64,7 @@ func main() {
 	}
 
 	brain := b.NewLLMBrain(conf.AzureAPIKey, conf.AzureEndpoint, conf.AzureDeployment, conf.AzureAPIVersion, 3)
-	mcp := t.NewMCPClient(conf.MCPBaseURL)
+	mcp := t.NewMCPClient(conf.MCPBaseURL, *explorationID)
 	handler := t.NewToolHandlerWithConfig(mcp, &conf, *parent)
 
 	var streamer *streaming.JSONStreamer
