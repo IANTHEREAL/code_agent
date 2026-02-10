@@ -68,7 +68,12 @@ func TestMCPClientAddsMetaTagToToolCalls(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			reqCh := make(chan map[string]any, 1)
+			type reqSnapshot struct {
+				payload       map[string]any
+				callAgent     string
+				explorationID string
+			}
+			reqCh := make(chan reqSnapshot, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, err := io.ReadAll(r.Body)
 				if err != nil {
@@ -82,7 +87,11 @@ func TestMCPClientAddsMetaTagToToolCalls(t *testing.T) {
 				if err := json.Unmarshal(body, &payload); err != nil {
 					t.Fatalf("unmarshal body %q: %v", string(body), err)
 				}
-				reqCh <- payload
+				reqCh <- reqSnapshot{
+					payload:       payload,
+					callAgent:     r.Header.Get("x-pantheon-call-agent"),
+					explorationID: r.Header.Get("x-pantheon-exploration-id"),
+				}
 
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusOK)
@@ -92,26 +101,33 @@ func TestMCPClientAddsMetaTagToToolCalls(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewMCPClient(srv.URL)
+			client := NewMCPClient(srv.URL, "explore-1")
 			client.client = srv.Client()
 			client.timeout = time.Second
 
 			tc.invoke(t, client)
 
 			select {
-			case payload := <-reqCh:
-				meta, ok := payload["_meta"].(map[string]any)
+			case snapshot := <-reqCh:
+				if snapshot.callAgent != "dev_agent" {
+					t.Fatalf("expected call agent header dev_agent, got %q", snapshot.callAgent)
+				}
+				if snapshot.explorationID != "explore-1" {
+					t.Fatalf("expected exploration header explore-1, got %q", snapshot.explorationID)
+				}
+
+				meta, ok := snapshot.payload["_meta"].(map[string]any)
 				if !ok {
-					t.Fatalf("payload missing _meta: %+v", payload)
+					t.Fatalf("payload missing _meta: %+v", snapshot.payload)
 				}
 				v, ok := meta["ai.tidb.pantheon-ai/agent"].(string)
 				if !ok || v != "dev_agent" {
 					t.Fatalf("unexpected agent tag: %+v", meta)
 				}
 
-				params, ok := payload["params"].(map[string]any)
+				params, ok := snapshot.payload["params"].(map[string]any)
 				if !ok {
-					t.Fatalf("params not a map in payload: %+v", payload)
+					t.Fatalf("params not a map in payload: %+v", snapshot.payload)
 				}
 				if len(params) == 0 {
 					t.Fatalf("params unexpectedly empty")

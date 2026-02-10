@@ -69,7 +69,7 @@ func main() {
 
 	prompt := prreview.BuildLogicAnalystPrompt(bug)
 
-	mcp := t.NewMCPClient(conf.MCPBaseURL)
+	mcp := t.NewMCPClient(conf.MCPBaseURL, "")
 	handler := t.NewToolHandlerWithConfig(mcp, &conf, *parent)
 
 	branchID, analysis, err := executeOnce(handler, "codex", prompt, conf.ProjectName, *parent)

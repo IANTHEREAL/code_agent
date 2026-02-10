@@ -25,9 +25,11 @@ type MCPClient struct {
 	sessionID  string
 	client     *http.Client
 	requestID  int
+	callAgent  string
+	exploreID  string
 }
 
-func NewMCPClient(baseURL string) *MCPClient {
+func NewMCPClient(baseURL, explorationID string) *MCPClient {
 	base := strings.TrimRight(baseURL, "/")
 	if base == "" {
 		base = "http://localhost:8000/mcp/sse"
@@ -38,6 +40,8 @@ func NewMCPClient(baseURL string) *MCPClient {
 		maxRetries: 3,
 		sessionID:  fmt.Sprintf("%d", time.Now().UnixNano()),
 		client:     &http.Client{},
+		callAgent:  "dev_agent",
+		exploreID:  strings.TrimSpace(explorationID),
 	}
 }
 
@@ -50,6 +54,10 @@ func (c *MCPClient) rpcPost(url string, body map[string]any, timeout time.Durati
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Mcp-Session-Id", c.sessionID)
+	req.Header.Set("x-pantheon-call-agent", c.callAgent)
+	if c.exploreID != "" {
+		req.Header.Set("x-pantheon-exploration-id", c.exploreID)
+	}
 
 	effectiveTimeout := timeout
 	if effectiveTimeout <= 0 {
@@ -92,7 +100,7 @@ func (c *MCPClient) callWithRetries(method string, params map[string]any, timeou
 		"method":  method,
 		"params":  copiedParams,
 		"_meta": map[string]any{
-			"ai.tidb.pantheon-ai/agent": "dev_agent",
+			"ai.tidb.pantheon-ai/agent": c.callAgent,
 		},
 	}
 	var lastErr error

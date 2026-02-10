@@ -22,6 +22,7 @@ func main() {
 	project := flag.String("project-name", "", "Optional project name override")
 	headless := flag.Bool("headless", false, "Run in headless mode (no chat prints)")
 	streamJSON := flag.Bool("stream-json", false, "Emit orchestration events as NDJSON to stdout (forces headless mode)")
+	explorationID := flag.String("exploration-id", "", "Optional exploration id for MCP headers")
 	flag.Parse()
 
 	streamEnabled := streamJSON != nil && *streamJSON
@@ -65,7 +66,7 @@ func main() {
 	}
 
 	brain := b.NewLLMBrain(conf.AzureAPIKey, conf.AzureEndpoint, conf.AzureDeployment, conf.AzureAPIVersion, 3)
-	mcp := t.NewMCPClient(conf.MCPBaseURL)
+	mcp := t.NewMCPClient(conf.MCPBaseURL, *explorationID)
 	handler := t.NewToolHandler(mcp, conf.ProjectName, *parent, conf.WorkspaceDir, &t.ToolHandlerTiming{
 		PollTimeout: conf.PollTimeout,
 		PollInitial: conf.PollInitial,
